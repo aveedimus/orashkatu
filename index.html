@@ -1,0 +1,512 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>orash katu</title>
+<style>
+  :root {
+    --bg: #0f1115;
+    --panel: #181b22;
+    --border: #272b34;
+    --text: #e6e8ec;
+    --muted: #8b909a;
+    --accent: #3b82f6;
+    --green: #16a34a;
+    --amber: #d97706;
+    --red: #dc2626;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: "Segoe UI", system-ui, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    padding: 24px;
+  }
+  header {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 16px; margin-bottom: 20px; flex-wrap: wrap;
+  }
+  h1 { font-size: 18px; margin: 0; font-weight: 600; }
+  .status { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--muted); }
+  .controls { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+  .field { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--muted); }
+  .field input, .field select {
+    background: var(--panel); color: var(--text);
+    border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; font-size: 13px;
+  }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); flex: none; }
+  .dot.searching { background: var(--amber); animation: pulse 1s infinite; }
+  .dot.online { background: var(--green); }
+  .dot.offline { background: var(--red); }
+  @keyframes pulse { 50% { opacity: 0.3; } }
+  button {
+    background: #222833; color: var(--text); border: 1px solid var(--border); border-radius: 6px;
+    padding: 7px 13px; font-size: 13px; cursor: pointer;
+  }
+  button:hover { border-color: var(--accent); }
+  button:disabled { opacity: 0.4; cursor: default; }
+  .info-bar { font-size: 12px; color: var(--muted); margin-bottom: 16px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 8px; }
+  .card {
+    background: #14171d; border: 1px solid var(--border); border-radius: 6px; padding: 9px 11px;
+    display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  }
+  .card:hover { border-color: #333a47; }
+  .card .name { font-size: 12.5px; font-weight: 600; color: var(--text); }
+  .card .actions { display: flex; gap: 6px; }
+  .card .actions button {
+    padding: 4px 9px; font-size: 11px; background: #222833; color: var(--text);
+    border: 1px solid var(--border);
+  }
+  .card .actions button:hover { border-color: var(--accent); filter: none; }
+  .card .actions button:disabled { opacity: 0.4; }
+  .empty { text-align: center; color: var(--muted); padding: 48px 0; font-size: 14px; }
+
+  #results { margin-top: 26px; }
+  #results h2 { font-size: 15px; font-weight: 600; margin: 0 0 14px; }
+  .thumb-grid { display: grid; grid-template-columns: repeat(auto-fill, 132px); justify-content: start; gap: 10px; }
+  .thumb {
+    width: 132px; background: #0c0e12; border: 1px solid var(--border); border-radius: 6px;
+    padding: 6px; display: flex; flex-direction: column; gap: 5px; cursor: pointer;
+  }
+  .thumb:hover { border-color: var(--accent); }
+  .thumb canvas { width: 120px; height: 84px; display: block; border-radius: 3px; }
+  .thumb .tlabel { font-size: 11px; color: var(--text); text-align: center; white-space: nowrap;
+    overflow: hidden; text-overflow: ellipsis; }
+  .more-wrap { display: flex; justify-content: center; align-items: center; gap: 8px; margin-top: 16px; }
+  .scroll-up { width: 34px; padding: 7px 0; text-align: center; color: var(--muted); }
+  .scroll-up:hover { color: var(--text); }
+</style>
+</head>
+<body>
+  <header>
+    <h1>orash katu</h1>
+    <div class="controls">
+      <div class="field">Timeframe
+        <select id="tfSelect">
+          <option>M1</option><option selected>M5</option><option>M15</option>
+          <option>M30</option><option>H1</option><option>H4</option><option>D1</option>
+        </select>
+      </div>
+      <div class="field">Filter
+        <input id="filterInput" type="text" placeholder="ticker…" style="width:110px" />
+      </div>
+      <div class="field">Min delta $
+        <input id="minDeltaInput" type="number" min="0" step="1000" value="0" style="width:90px" />
+      </div>
+      <div class="field">Binding
+        <input id="bindingInput" type="text" placeholder="none" maxlength="3" style="width:54px" />
+      </div>
+      <div class="status"><span id="dot" class="dot"></span><span id="statusText">Idle</span></div>
+      <button id="refreshBtn">Refresh</button>
+    </div>
+  </header>
+
+  <div class="info-bar" id="infoBar">Scanning for a running MetaScalp instance&hellip;</div>
+  <div class="grid" id="grid"></div>
+  <div id="results"></div>
+
+<script>
+// MetaScalp delta cluster maps — see MetaScalp-Api.md
+// Discovery → connections → main-group tickers, all over REST. Clicking a market renders a
+// contact sheet of miniature footprints — one per ticker with cluster data. Each thumbnail
+// is 10 time bars × price levels (high at top); per level the bar width = total volume,
+// color = side (green buy / red sell), brightness = delta dominance. AskSize/BidSize are USD.
+const HOST = "127.0.0.1";
+const PORT_START = 17845;
+const PORT_END = 17855;
+const ZOOM_INDEX = 1;
+const FETCH_CONCURRENCY = 10;
+const THUMB_ROWS = 38;       // price bins per thumbnail
+const THUMB_W = 120, THUMB_H = 84;  // canvas DISPLAY size in CSS px (backing store = ×dpr for crispness)
+const PAGE = 80;             // thumbnails per "Show more" page
+
+const dot = document.getElementById("dot");
+const statusText = document.getElementById("statusText");
+const infoBar = document.getElementById("infoBar");
+const grid = document.getElementById("grid");
+const results = document.getElementById("results");
+const refreshBtn = document.getElementById("refreshBtn");
+const tfSelect = document.getElementById("tfSelect");
+const filterInput = document.getElementById("filterInput");
+const minDeltaInput = document.getElementById("minDeltaInput");
+const bindingInput = document.getElementById("bindingInput");
+
+let activePort = null;
+let lastConn = null;        // connection the current maps belong to (for change-ticker)
+let galleryCtx = null;      // { label, timeFrame, items:[{ticker, model}] }
+let shownCount = 0;
+
+// Case-insensitive key lookup — the live API mixes lowercase wrapper keys with PascalCase
+// inner fields, so never assume one casing (see CLAUDE.md).
+function pick(obj, ...keys) {
+  if (!obj) return undefined;
+  for (const k of keys) {
+    if (obj[k] !== undefined) return obj[k];
+    const lower = k.toLowerCase();
+    const match = Object.keys(obj).find(o => o.toLowerCase() === lower);
+    if (match) return obj[match];
+  }
+  return undefined;
+}
+
+function setStatus(cls, text) { dot.className = "dot " + cls; statusText.textContent = text; }
+
+// Run async `worker` over `items` with bounded concurrency.
+async function runPool(items, worker, concurrency) {
+  const out = new Array(items.length);
+  let next = 0;
+  async function lane() {
+    while (next < items.length) { const i = next++; out[i] = await worker(items[i], i); }
+  }
+  await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, lane));
+  return out;
+}
+
+// ---- Discovery / connections / tickers ----
+
+async function ping(port) {
+  try {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), 600);
+    const res = await fetch(`http://${HOST}:${port}/ping`, { signal: ctrl.signal });
+    clearTimeout(t);
+    if (!res.ok) return null;
+    const data = await res.json();
+    if (pick(data, "App") === "MetaScalp") return { port, version: pick(data, "Version") };
+  } catch (_) {}
+  return null;
+}
+
+async function discover() {
+  const ports = [];
+  for (let p = PORT_START; p <= PORT_END; p++) ports.push(p);
+  const found = await Promise.all(ports.map(ping));
+  return found.find(Boolean) || null;
+}
+
+async function fetchConnections(port) {
+  const res = await fetch(`http://${HOST}:${port}/api/connections`);
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return pick(await res.json(), "Connections") || [];
+}
+
+// GET /tickers?Refresh=true — fresh from exchange; filter non-tradable; biggest quote group.
+async function fetchMainGroup(port, connId) {
+  const res = await fetch(`http://${HOST}:${port}/api/connections/${connId}/tickers?Refresh=true`);
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const tickers = pick(await res.json(), "Tickers") || [];
+  const groups = new Map();
+  for (const t of tickers) {
+    if (pick(t, "IsTradingAllowed") !== true) continue;
+    const quote = pick(t, "QuoteAsset") || "—";
+    const name = pick(t, "Name");
+    if (!name) continue;
+    if (!groups.has(quote)) groups.set(quote, []);
+    groups.get(quote).push(name);
+  }
+  let main = { quote: null, tickers: [] };
+  for (const [quote, names] of groups) {
+    if (names.length > main.tickers.length) main = { quote, tickers: names };
+  }
+  return main;
+}
+
+async function fetchClusterSnapshot(port, connId, ticker, timeFrame) {
+  const url = `http://${HOST}:${port}/api/connections/${connId}/cluster-snapshot`
+    + `?Ticker=${encodeURIComponent(ticker)}&TimeFrame=${timeFrame}&ZoomIndex=${ZOOM_INDEX}`;
+  const res = await fetch(url);
+  if (!res.ok) return null;
+  return res.json();
+}
+
+// ---- Thumbnail model + drawing ----
+
+// Aggregate a cluster snapshot into a grid: C time columns x THUMB_ROWS price bins, each
+// bin holding summed bid/ask USD. maxDelta = biggest |bid-ask| across all 10 bars (the
+// shared calibration for width + brightness). Returns { C, R, bid, ask, maxDelta } or null.
+function buildThumbModel(snap) {
+  const cols = pick(snap, "Columns") || [];
+  const C = cols.length;
+  if (!C) return null;
+
+  let lo = Infinity, hi = -Infinity;
+  for (const col of cols) {
+    for (const it of pick(col, "Items") || []) {
+      const p = Number(pick(it, "Price"));
+      if (!Number.isFinite(p)) continue;
+      if (p < lo) lo = p;
+      if (p > hi) hi = p;
+    }
+  }
+  if (!Number.isFinite(lo) || !Number.isFinite(hi)) return null;
+
+  const R = THUMB_ROWS, span = hi - lo;
+  const bid = new Float64Array(C * R);
+  const ask = new Float64Array(C * R);
+  for (let c = 0; c < C; c++) {
+    for (const it of pick(cols[c], "Items") || []) {
+      const p = Number(pick(it, "Price"));
+      if (!Number.isFinite(p)) continue;
+      const row = span > 0 ? Math.round((hi - p) / span * (R - 1)) : 0; // 0 = top (high price)
+      const idx = c * R + row;
+      bid[idx] += Number(pick(it, "BidSize")) || 0;
+      ask[idx] += Number(pick(it, "AskSize")) || 0;
+    }
+  }
+  let maxDelta = 0;
+  for (let i = 0; i < bid.length; i++) {
+    const d = Math.abs(bid[i] - ask[i]);
+    if (d > maxDelta) maxDelta = d;
+  }
+  if (maxDelta <= 0) return null; // nothing one-sided to show
+  return { C, R, bid, ask, maxDelta };
+}
+
+// Draw the delta footprint: 10 time bars (columns) x price levels (high at top). Each level
+// is a horizontal bar in its column slot; balanced levels drop out (only net delta shows).
+//   COLOR      = side: green = buy (bid-heavy), red = sell (ask-heavy).
+//   WIDTH      = |delta| vs the MAX delta (sqrt) — the biggest one-sided level / anomaly is
+//                the widest bar.
+//   BRIGHTNESS = |delta| vs the MAX delta, curved (pow 0.7) so small deltas stay dim/faint
+//                and only genuinely big deltas glow — like a real footprint.
+function drawThumb(cv, m) {
+  const ctx = cv.getContext("2d");
+  ctx.fillStyle = "#0b0d11";
+  ctx.fillRect(0, 0, cv.width, cv.height);
+  const cw = cv.width / m.C, ch = cv.height / m.R;
+  const maxDelta = m.maxDelta || 1;
+  for (let c = 0; c < m.C; c++) {
+    for (let r = 0; r < m.R; r++) {
+      const i = c * m.R + r;
+      const b = m.bid[i], a = m.ask[i];
+      const dAbs = Math.abs(b - a);
+      if (dAbs <= 0) continue;                         // skip balanced / empty levels
+      const nv = dAbs / maxDelta;
+      const w = Math.max(1, Math.sqrt(nv) * cw);       // width: |delta| true scale
+      const alpha = 0.05 + 0.95 * Math.pow(nv, 0.7);   // brightness: small stay dim
+      const col = b >= a ? "46,214,104" : "236,72,60";
+      ctx.fillStyle = `rgba(${col},${alpha.toFixed(3)})`;
+      ctx.fillRect(c * cw, r * ch, w, ch + 0.6);
+    }
+  }
+}
+
+// ---- Build + render the contact sheet for a connection ----
+
+async function showMaps(conn, btn) {
+  const tickers = conn.MainGroup ? conn.MainGroup.tickers : [];
+  if (!tickers.length) return;
+  const timeFrame = tfSelect.value;
+
+  btn.disabled = true;
+  lastConn = conn;
+  const label = conn.Name ?? `Connection ${conn.Id}`;
+  results.innerHTML = "";
+  infoBar.textContent = `Fetching ${tickers.length} cluster snapshot(s) for ${label} (${timeFrame})…`;
+
+  let done = 0;
+  const models = await runPool(tickers, async (ticker) => {
+    let model = null;
+    try {
+      const snap = await fetchClusterSnapshot(activePort, conn.Id, ticker, timeFrame);
+      if (snap) model = buildThumbModel(snap);
+    } catch (_) {}
+    done++;
+    if (done % 25 === 0 || done === tickers.length) {
+      infoBar.textContent = `Fetched ${done}/${tickers.length} snapshot(s) for ${label}…`;
+    }
+    return model ? { ticker, model } : null;
+  }, FETCH_CONCURRENCY);
+
+  btn.disabled = false;
+  const items = models.filter(Boolean);
+  if (!items.length) {
+    infoBar.textContent = `${label}: no cluster data for any ticker (${tickers.length} scanned).`;
+    results.innerHTML = `<div class="empty">No delta cluster data.</div>`;
+    return;
+  }
+
+  galleryCtx = { label, timeFrame, items };
+  shownCount = PAGE;
+  filterInput.value = "";
+  renderGallery();
+  infoBar.textContent = `${label}: ${items.length}/${tickers.length} ticker(s) with cluster data · ${timeFrame}. `
+    + `Scan the maps; type in Filter to narrow; click a map to set its ticker.`;
+}
+
+function renderGallery() {
+  if (!galleryCtx) return;
+  const { label, timeFrame, items } = galleryCtx;
+  const q = filterInput.value.trim().toUpperCase();
+  const minD = Math.max(0, parseFloat(minDeltaInput.value) || 0);
+  const filtered = items.filter(it =>
+    (!q || it.ticker.toUpperCase().includes(q)) && it.model.maxDelta >= minD);
+  const shown = filtered.slice(0, shownCount);
+
+  results.innerHTML = "";
+
+  const h2 = document.createElement("h2");
+  h2.textContent = `${label} — ${filtered.length} map(s)${q ? ` matching “${q}”` : ""} · ${timeFrame}`
+    + (filtered.length > shown.length ? ` (showing ${shown.length})` : "");
+  results.appendChild(h2);
+
+  const gridEl = document.createElement("div");
+  gridEl.className = "thumb-grid";
+  for (const it of shown) {
+    const card = document.createElement("div");
+    card.className = "thumb";
+    card.dataset.ticker = it.ticker;
+
+    const cv = document.createElement("canvas");
+    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    cv.width = Math.round(THUMB_W * dpr);   // backing store at device resolution → crisp
+    cv.height = Math.round(THUMB_H * dpr);
+    cv.style.width = THUMB_W + "px";        // displayed 1:1, no CSS scaling/blur
+    cv.style.height = THUMB_H + "px";
+    drawThumb(cv, it.model);
+    card.appendChild(cv);
+
+    const lab = document.createElement("div");
+    lab.className = "tlabel";
+    lab.textContent = it.ticker;
+    card.appendChild(lab);
+
+    gridEl.appendChild(card);
+  }
+  results.appendChild(gridEl);
+
+  if (shown.length) {
+    const wrap = document.createElement("div");
+    wrap.className = "more-wrap";
+    const more = document.createElement("button");
+    const remaining = filtered.length - shown.length;
+    if (remaining > 0) {
+      more.textContent = `Show more (${remaining})`;
+      more.addEventListener("click", () => { shownCount += PAGE; renderGallery(); });
+    } else {
+      more.textContent = "the end";
+      more.disabled = true;
+    }
+    const up = document.createElement("button");
+    up.className = "scroll-up";
+    up.textContent = "↑";
+    up.title = "Scroll to top";
+    up.addEventListener("click", () => window.scrollTo({ top: 0, behavior: "smooth" }));
+    wrap.appendChild(more);
+    wrap.appendChild(up);
+    results.appendChild(wrap);
+  }
+}
+
+// Live filtering as you type (reset paging).
+function onFilterChange() {
+  if (!galleryCtx) return;
+  shownCount = PAGE;
+  renderGallery();
+}
+filterInput.addEventListener("input", onFilterChange);
+minDeltaInput.addEventListener("input", onFilterChange);
+
+// Click a thumbnail → set that ticker in MetaScalp on the maps' connection.
+results.addEventListener("click", (e) => {
+  const card = e.target.closest(".thumb");
+  if (card) changeTicker(card.dataset.ticker);
+});
+
+// POST /api/change-ticker — switch MetaScalp's active ticker (+ optional binding).
+async function changeTicker(ticker) {
+  if (!lastConn || !ticker) return;
+  const body = { Exchange: pick(lastConn, "ExchangeId"), Market: pick(lastConn, "MarketType"), Ticker: ticker };
+  const binding = bindingInput.value.trim();
+  if (binding) body.Binding = binding;
+  try {
+    const res = await fetch(`http://${HOST}:${activePort}/api/change-ticker`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+    });
+    const data = await res.json().catch(() => ({}));
+    infoBar.textContent = res.ok
+      ? `Set ticker → ${ticker}${binding ? ` (binding ${binding})` : ""} on ${lastConn.Name ?? lastConn.Id}.`
+      : `Change ticker failed: ${pick(data, "Error") || res.status}`;
+  } catch (err) {
+    infoBar.textContent = `Change ticker failed: ${err.message}`;
+  }
+}
+
+// ---- Connection cards ----
+
+function renderConnections(conns) {
+  grid.innerHTML = "";
+  results.innerHTML = "";
+  galleryCtx = null;
+  if (!conns.length) {
+    grid.innerHTML = `<div class="empty">No active exchange connections.</div>`;
+    return;
+  }
+  for (const c of conns) {
+    const card = document.createElement("div");
+    card.className = "card";
+    const baseName = c.Name ?? `${c.Exchange} · ${c.Market}`;
+    const count = typeof c.MainGroupCount === "number" ? `(${c.MainGroupCount})` : "";
+    const tickerCount = c.MainGroup ? c.MainGroup.tickers.length : 0;
+    card.innerHTML = `
+      <div class="name">${baseName}${count}</div>
+      <div class="actions">
+        <button class="maps-btn" ${tickerCount ? "" : "disabled"}>Show maps</button>
+      </div>`;
+    grid.appendChild(card);
+    card.querySelector(".maps-btn").addEventListener("click", (e) => showMaps(c, e.target));
+  }
+}
+
+async function run() {
+  refreshBtn.disabled = true;
+  grid.innerHTML = "";
+  results.innerHTML = "";
+  galleryCtx = null;
+  setStatus("searching", "Scanning…");
+  infoBar.textContent = `Scanning ports ${PORT_START}–${PORT_END} for a running MetaScalp instance…`;
+
+  const found = await discover();
+  if (!found) {
+    activePort = null;
+    setStatus("offline", "Not found");
+    infoBar.textContent = `No MetaScalp instance responded on ports ${PORT_START}–${PORT_END}. Is the app running?`;
+    grid.innerHTML = `<div class="empty">MetaScalp is not reachable.</div>`;
+    refreshBtn.disabled = false;
+    return;
+  }
+
+  activePort = found.port;
+  setStatus("online", `MetaScalp v${found.version}`);
+  infoBar.textContent = `Connected to MetaScalp v${found.version} on port ${found.port}. Loading connections…`;
+
+  try {
+    const conns = await fetchConnections(found.port);
+    infoBar.textContent = `Connected to MetaScalp v${found.version} on port ${found.port} — ${conns.length} connection(s). Loading tickers…`;
+    await Promise.all(conns.map(async (c) => {
+      try {
+        c.MainGroup = await fetchMainGroup(found.port, c.Id);
+        c.MainGroupCount = c.MainGroup.tickers.length;
+      } catch (_) {
+        c.MainGroup = { quote: null, tickers: [] };
+        c.MainGroupCount = null;
+      }
+    }));
+    infoBar.textContent = `Connected to MetaScalp v${found.version} on port ${found.port} — ${conns.length} connection(s). `
+      + `Pick a timeframe, then Show maps on a connection.`;
+    renderConnections(conns);
+  } catch (err) {
+    infoBar.textContent = `Failed to load connections: ${err.message}`;
+    grid.innerHTML = `<div class="empty">Could not load connections.</div>`;
+  }
+  refreshBtn.disabled = false;
+}
+
+refreshBtn.addEventListener("click", run);
+run();
+</script>
+</body>
+</html>
