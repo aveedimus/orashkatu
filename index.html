@@ -36,6 +36,14 @@
     background: var(--panel); color: var(--text);
     border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; font-size: 13px;
   }
+  .tuning-bar {
+    display: flex; align-items: center; flex-wrap: wrap; gap: 14px;
+    background: #12151b; border: 1px solid var(--border); border-radius: 8px;
+    padding: 9px 14px; margin-bottom: 16px;
+  }
+  .tune-title { font-size: 11px; font-weight: 700; text-transform: uppercase;
+    letter-spacing: .8px; color: var(--muted); margin-right: 2px; }
+  .reset-btn { margin-left: auto; padding: 5px 11px; font-size: 12px; }
   .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); flex: none; }
   .dot.searching { background: var(--amber); animation: pulse 1s infinite; }
   .dot.online { background: var(--green); }
@@ -60,19 +68,24 @@
     padding: 4px 9px; font-size: 11px; background: #222833; color: var(--text);
     border: 1px solid var(--border);
   }
+  .card .actions button {
+    width: 34px; height: 34px; min-width: 34px; padding: 0; flex: none;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 16px; line-height: 1; border-radius: 6px;
+  }
   .card .actions button:hover { border-color: var(--accent); filter: none; }
   .card .actions button:disabled { opacity: 0.4; }
   .empty { text-align: center; color: var(--muted); padding: 48px 0; font-size: 14px; }
 
   #results { margin-top: 26px; }
   #results h2 { font-size: 15px; font-weight: 600; margin: 0 0 14px; }
-  .thumb-grid { display: grid; grid-template-columns: repeat(auto-fill, 132px); justify-content: start; gap: 10px; }
+  .thumb-grid { display: grid; justify-content: start; gap: 10px; } /* columns sized in JS */
   .thumb {
-    width: 132px; background: #0c0e12; border: 1px solid var(--border); border-radius: 6px;
+    background: #0c0e12; border: 1px solid var(--border); border-radius: 6px;
     padding: 6px; display: flex; flex-direction: column; gap: 5px; cursor: pointer;
   }
   .thumb:hover { border-color: var(--accent); }
-  .thumb canvas { width: 120px; height: 84px; display: block; border-radius: 3px; }
+  .thumb canvas { display: block; border-radius: 3px; } /* size set in JS */
   .thumb .tlabel { font-size: 11px; color: var(--text); text-align: center; white-space: nowrap;
     overflow: hidden; text-overflow: ellipsis; }
   .more-wrap { display: flex; justify-content: center; align-items: center; gap: 8px; margin-top: 16px; }
@@ -104,6 +117,17 @@
     </div>
   </header>
 
+  <div class="tuning-bar">
+    <span class="tune-title">Tuning</span>
+    <div class="field">Rows <input id="rowsInput" type="number" min="5" max="160" step="1" value="38" style="width:52px" /></div>
+    <div class="field">Height <input id="hInput" type="number" min="40" max="500" step="2" value="84" style="width:52px" /></div>
+    <div class="field">Width <input id="wInput" type="number" min="40" max="500" step="2" value="120" style="width:52px" /></div>
+    <div class="field">Width-exp <input id="wExpInput" type="number" min="0.1" max="2" step="0.05" value="0.5" style="width:52px" /></div>
+    <div class="field">Bright-exp <input id="bExpInput" type="number" min="0.1" max="3" step="0.05" value="0.7" style="width:52px" /></div>
+    <div class="field">Floor <input id="floorInput" type="number" min="0" max="0.5" step="0.01" value="0.05" style="width:52px" /></div>
+    <button id="resetTuneBtn" class="reset-btn">Reset defaults</button>
+  </div>
+
   <div class="info-bar" id="infoBar">Scanning for a running MetaScalp instance&hellip;</div>
   <div class="grid" id="grid"></div>
   <div id="results"></div>
@@ -119,9 +143,18 @@ const PORT_START = 17845;
 const PORT_END = 17855;
 const ZOOM_INDEX = 1;
 const FETCH_CONCURRENCY = 10;
-const THUMB_ROWS = 38;       // price bins per thumbnail
-const THUMB_W = 120, THUMB_H = 84;  // canvas DISPLAY size in CSS px (backing store = ×dpr for crispness)
 const PAGE = 80;             // thumbnails per "Show more" page
+
+// Live-tunable render settings (read from the UI; persisted in localStorage).
+const TUNE_KEY = "orashkatu.tune";
+const DEFAULTS = {
+  rows: 38,        // price bins per thumbnail
+  w: 120, h: 84,   // canvas display size (CSS px); backing store = ×dpr
+  widthExp: 0.5,   // bar width curve: w ∝ (delta/maxDelta)^widthExp  (0.5 = sqrt)
+  brightExp: 0.7,  // brightness curve: alpha ∝ (delta/maxDelta)^brightExp (higher = small dimmer)
+  floor: 0.05,     // minimum brightness for the faintest shown delta
+};
+const settings = { ...DEFAULTS };
 
 const dot = document.getElementById("dot");
 const statusText = document.getElementById("statusText");
@@ -132,12 +165,70 @@ const refreshBtn = document.getElementById("refreshBtn");
 const tfSelect = document.getElementById("tfSelect");
 const filterInput = document.getElementById("filterInput");
 const minDeltaInput = document.getElementById("minDeltaInput");
+const rowsInput = document.getElementById("rowsInput");
+const hInput = document.getElementById("hInput");
+const wInput = document.getElementById("wInput");
+const wExpInput = document.getElementById("wExpInput");
+const bExpInput = document.getElementById("bExpInput");
+const floorInput = document.getElementById("floorInput");
+const resetTuneBtn = document.getElementById("resetTuneBtn");
+const tuneInputs = [rowsInput, hInput, wInput, wExpInput, bExpInput, floorInput];
+
+// Pull the tuning controls into `settings` (clamped to sane ranges).
+function readSettings() {
+  const clamp = (v, lo, hi, dflt) => Number.isFinite(v) ? Math.min(hi, Math.max(lo, v)) : dflt;
+  settings.rows = Math.round(clamp(parseInt(rowsInput.value, 10), 5, 160, DEFAULTS.rows));
+  settings.h = Math.round(clamp(parseFloat(hInput.value), 40, 500, DEFAULTS.h));
+  settings.w = Math.round(clamp(parseFloat(wInput.value), 40, 500, DEFAULTS.w));
+  settings.widthExp = clamp(parseFloat(wExpInput.value), 0.1, 2, DEFAULTS.widthExp);
+  settings.brightExp = clamp(parseFloat(bExpInput.value), 0.1, 3, DEFAULTS.brightExp);
+  settings.floor = clamp(parseFloat(floorInput.value), 0, 0.5, DEFAULTS.floor);
+}
+
+// Put a settings object into the input boxes.
+function applyToInputs(s) {
+  rowsInput.value = s.rows; hInput.value = s.h; wInput.value = s.w;
+  wExpInput.value = s.widthExp; bExpInput.value = s.brightExp; floorInput.value = s.floor;
+}
+
+// Persist current tune to localStorage; load it back (or defaults) on startup.
+function saveTune() { try { localStorage.setItem(TUNE_KEY, JSON.stringify(settings)); } catch (_) {} }
+function loadTune() {
+  let s = { ...DEFAULTS };
+  try {
+    const raw = localStorage.getItem(TUNE_KEY);
+    if (raw) s = { ...DEFAULTS, ...JSON.parse(raw) };
+  } catch (_) {}
+  applyToInputs(s);
+  readSettings(); // clamp + sync into `settings`
+}
+
+// Persist the everyday prefs (timeframe, min delta, binding) too.
+const PREF_KEY = "orashkatu.prefs";
+function savePrefs() {
+  try {
+    localStorage.setItem(PREF_KEY, JSON.stringify({
+      tf: tfSelect.value, minDelta: minDeltaInput.value, binding: bindingInput.value,
+    }));
+  } catch (_) {}
+}
+function loadPrefs() {
+  try {
+    const p = JSON.parse(localStorage.getItem(PREF_KEY) || "{}");
+    if (p.tf) tfSelect.value = p.tf;
+    if (p.minDelta != null) minDeltaInput.value = p.minDelta;
+    if (p.binding != null) bindingInput.value = p.binding;
+  } catch (_) {}
+}
 const bindingInput = document.getElementById("bindingInput");
 
 let activePort = null;
 let lastConn = null;        // connection the current maps belong to (for change-ticker)
 let galleryCtx = null;      // { label, timeFrame, items:[{ticker, model}] }
 let shownCount = 0;
+let scanToken = 0;          // bumped each scan; a stale scan bails when it sees a newer token
+let scanAbort = null;       // AbortController for the in-flight scan's fetches
+let scanBtn = null;         // the Show-maps button currently disabled by a running scan
 
 // Case-insensitive key lookup — the live API mixes lowercase wrapper keys with PascalCase
 // inner fields, so never assume one casing (see CLAUDE.md).
@@ -214,46 +305,55 @@ async function fetchMainGroup(port, connId) {
   return main;
 }
 
-async function fetchClusterSnapshot(port, connId, ticker, timeFrame) {
+async function fetchClusterSnapshot(port, connId, ticker, timeFrame, signal) {
   const url = `http://${HOST}:${port}/api/connections/${connId}/cluster-snapshot`
     + `?Ticker=${encodeURIComponent(ticker)}&TimeFrame=${timeFrame}&ZoomIndex=${ZOOM_INDEX}`;
-  const res = await fetch(url);
+  const res = await fetch(url, { signal });
   if (!res.ok) return null;
   return res.json();
 }
 
 // ---- Thumbnail model + drawing ----
 
-// Aggregate a cluster snapshot into a grid: C time columns x THUMB_ROWS price bins, each
-// bin holding summed bid/ask USD. maxDelta = biggest |bid-ask| across all 10 bars (the
-// shared calibration for width + brightness). Returns { C, R, bid, ask, maxDelta } or null.
-function buildThumbModel(snap) {
+// Parse a snapshot into raw, row-count-independent form so we can re-bin live when the
+// user changes the row count. Returns { cols:[[{p,bid,ask}…]…], lo, hi, rawMaxDelta } or null.
+// rawMaxDelta = biggest |bid-ask| over individual price levels (stable; used by Min-delta filter).
+function buildRaw(snap) {
   const cols = pick(snap, "Columns") || [];
-  const C = cols.length;
-  if (!C) return null;
-
-  let lo = Infinity, hi = -Infinity;
+  if (!cols.length) return null;
+  let lo = Infinity, hi = -Infinity, rawMaxDelta = 0;
+  const out = [];
   for (const col of cols) {
+    const lv = [];
     for (const it of pick(col, "Items") || []) {
       const p = Number(pick(it, "Price"));
       if (!Number.isFinite(p)) continue;
       if (p < lo) lo = p;
       if (p > hi) hi = p;
+      const bid = Number(pick(it, "BidSize")) || 0;
+      const ask = Number(pick(it, "AskSize")) || 0;
+      const d = Math.abs(bid - ask);
+      if (d > rawMaxDelta) rawMaxDelta = d;
+      lv.push({ p, bid, ask });
     }
+    out.push(lv);
   }
-  if (!Number.isFinite(lo) || !Number.isFinite(hi)) return null;
+  if (!Number.isFinite(lo) || !Number.isFinite(hi) || rawMaxDelta <= 0) return null;
+  return { cols: out, lo, hi, rawMaxDelta };
+}
 
-  const R = THUMB_ROWS, span = hi - lo;
+// Bin raw levels into a C x rows grid (high price at top). maxDelta = biggest binned
+// |bid-ask| across all bars — the shared width + brightness calibration.
+function buildModel(raw, rows) {
+  const C = raw.cols.length, R = rows, span = raw.hi - raw.lo;
   const bid = new Float64Array(C * R);
   const ask = new Float64Array(C * R);
   for (let c = 0; c < C; c++) {
-    for (const it of pick(cols[c], "Items") || []) {
-      const p = Number(pick(it, "Price"));
-      if (!Number.isFinite(p)) continue;
-      const row = span > 0 ? Math.round((hi - p) / span * (R - 1)) : 0; // 0 = top (high price)
+    for (const lv of raw.cols[c]) {
+      const row = span > 0 ? Math.round((raw.hi - lv.p) / span * (R - 1)) : 0;
       const idx = c * R + row;
-      bid[idx] += Number(pick(it, "BidSize")) || 0;
-      ask[idx] += Number(pick(it, "AskSize")) || 0;
+      bid[idx] += lv.bid;
+      ask[idx] += lv.ask;
     }
   }
   let maxDelta = 0;
@@ -261,17 +361,14 @@ function buildThumbModel(snap) {
     const d = Math.abs(bid[i] - ask[i]);
     if (d > maxDelta) maxDelta = d;
   }
-  if (maxDelta <= 0) return null; // nothing one-sided to show
-  return { C, R, bid, ask, maxDelta };
+  return { C, R, bid, ask, maxDelta: maxDelta || 1 };
 }
 
-// Draw the delta footprint: 10 time bars (columns) x price levels (high at top). Each level
-// is a horizontal bar in its column slot; balanced levels drop out (only net delta shows).
+// Draw the delta footprint: time bars (columns) x price levels (high at top). Each level is
+// a horizontal bar in its column slot; balanced levels drop out (only net delta shows).
 //   COLOR      = side: green = buy (bid-heavy), red = sell (ask-heavy).
-//   WIDTH      = |delta| vs the MAX delta (sqrt) — the biggest one-sided level / anomaly is
-//                the widest bar.
-//   BRIGHTNESS = |delta| vs the MAX delta, curved (pow 0.7) so small deltas stay dim/faint
-//                and only genuinely big deltas glow — like a real footprint.
+//   WIDTH      = (|delta|/maxDelta)^widthExp — biggest one-sided level / anomaly is widest.
+//   BRIGHTNESS = floor + (1-floor)·(|delta|/maxDelta)^brightExp — small deltas stay dim.
 function drawThumb(cv, m) {
   const ctx = cv.getContext("2d");
   ctx.fillStyle = "#0b0d11";
@@ -285,8 +382,8 @@ function drawThumb(cv, m) {
       const dAbs = Math.abs(b - a);
       if (dAbs <= 0) continue;                         // skip balanced / empty levels
       const nv = dAbs / maxDelta;
-      const w = Math.max(1, Math.sqrt(nv) * cw);       // width: |delta| true scale
-      const alpha = 0.05 + 0.95 * Math.pow(nv, 0.7);   // brightness: small stay dim
+      const w = Math.max(1, Math.pow(nv, settings.widthExp) * cw);
+      const alpha = settings.floor + (1 - settings.floor) * Math.pow(nv, settings.brightExp);
       const col = b >= a ? "46,214,104" : "236,72,60";
       ctx.fillStyle = `rgba(${col},${alpha.toFixed(3)})`;
       ctx.fillRect(c * cw, r * ch, w, ch + 0.6);
@@ -301,6 +398,14 @@ async function showMaps(conn, btn) {
   if (!tickers.length) return;
   const timeFrame = tfSelect.value;
 
+  // Cancel any scan already running, and re-enable its button, before starting this one.
+  if (scanAbort) scanAbort.abort();
+  if (scanBtn && scanBtn !== btn) scanBtn.disabled = false;
+  const myToken = ++scanToken;
+  scanAbort = new AbortController();
+  const signal = scanAbort.signal;
+  scanBtn = btn;
+
   btn.disabled = true;
   lastConn = conn;
   const label = conn.Name ?? `Connection ${conn.Id}`;
@@ -308,21 +413,25 @@ async function showMaps(conn, btn) {
   infoBar.textContent = `Fetching ${tickers.length} cluster snapshot(s) for ${label} (${timeFrame})…`;
 
   let done = 0;
-  const models = await runPool(tickers, async (ticker) => {
-    let model = null;
+  const raws = await runPool(tickers, async (ticker) => {
+    if (signal.aborted) return null;
+    let raw = null;
     try {
-      const snap = await fetchClusterSnapshot(activePort, conn.Id, ticker, timeFrame);
-      if (snap) model = buildThumbModel(snap);
+      const snap = await fetchClusterSnapshot(activePort, conn.Id, ticker, timeFrame, signal);
+      if (snap) raw = buildRaw(snap);
     } catch (_) {}
     done++;
-    if (done % 25 === 0 || done === tickers.length) {
+    if (myToken === scanToken && (done % 25 === 0 || done === tickers.length)) {
       infoBar.textContent = `Fetched ${done}/${tickers.length} snapshot(s) for ${label}…`;
     }
-    return model ? { ticker, model } : null;
+    return raw ? { ticker, raw } : null;
   }, FETCH_CONCURRENCY);
 
+  if (myToken !== scanToken) return; // a newer scan superseded this one — drop our results
+  scanAbort = null;
+  scanBtn = null;
   btn.disabled = false;
-  const items = models.filter(Boolean);
+  const items = raws.filter(Boolean);
   if (!items.length) {
     infoBar.textContent = `${label}: no cluster data for any ticker (${tickers.length} scanned).`;
     results.innerHTML = `<div class="empty">No delta cluster data.</div>`;
@@ -339,11 +448,12 @@ async function showMaps(conn, btn) {
 
 function renderGallery() {
   if (!galleryCtx) return;
+  readSettings();
   const { label, timeFrame, items } = galleryCtx;
   const q = filterInput.value.trim().toUpperCase();
   const minD = Math.max(0, parseFloat(minDeltaInput.value) || 0);
   const filtered = items.filter(it =>
-    (!q || it.ticker.toUpperCase().includes(q)) && it.model.maxDelta >= minD);
+    (!q || it.ticker.toUpperCase().includes(q)) && it.raw.rawMaxDelta >= minD);
   const shown = filtered.slice(0, shownCount);
 
   results.innerHTML = "";
@@ -353,20 +463,22 @@ function renderGallery() {
     + (filtered.length > shown.length ? ` (showing ${shown.length})` : "");
   results.appendChild(h2);
 
+  const dpr = Math.min(2, window.devicePixelRatio || 1);
   const gridEl = document.createElement("div");
   gridEl.className = "thumb-grid";
+  gridEl.style.gridTemplateColumns = `repeat(auto-fill, ${settings.w + 14}px)`;
   for (const it of shown) {
     const card = document.createElement("div");
     card.className = "thumb";
+    card.style.width = (settings.w + 14) + "px";
     card.dataset.ticker = it.ticker;
 
     const cv = document.createElement("canvas");
-    const dpr = Math.min(2, window.devicePixelRatio || 1);
-    cv.width = Math.round(THUMB_W * dpr);   // backing store at device resolution → crisp
-    cv.height = Math.round(THUMB_H * dpr);
-    cv.style.width = THUMB_W + "px";        // displayed 1:1, no CSS scaling/blur
-    cv.style.height = THUMB_H + "px";
-    drawThumb(cv, it.model);
+    cv.width = Math.round(settings.w * dpr);   // backing store at device resolution → crisp
+    cv.height = Math.round(settings.h * dpr);
+    cv.style.width = settings.w + "px";         // displayed 1:1, no CSS scaling/blur
+    cv.style.height = settings.h + "px";
+    drawThumb(cv, buildModel(it.raw, settings.rows));
     card.appendChild(cv);
 
     const lab = document.createElement("div");
@@ -409,6 +521,19 @@ function onFilterChange() {
 }
 filterInput.addEventListener("input", onFilterChange);
 minDeltaInput.addEventListener("input", onFilterChange);
+
+// Persist everyday prefs on change (timeframe applies on next Show maps).
+tfSelect.addEventListener("change", savePrefs);
+minDeltaInput.addEventListener("input", savePrefs);
+bindingInput.addEventListener("input", savePrefs);
+
+// Tuning controls — re-render with new settings (no refetch), then persist.
+for (const el of tuneInputs) {
+  el.addEventListener("input", () => { readSettings(); saveTune(); if (galleryCtx) renderGallery(); });
+}
+resetTuneBtn.addEventListener("click", () => {
+  applyToInputs(DEFAULTS); readSettings(); saveTune(); if (galleryCtx) renderGallery();
+});
 
 // Click a thumbnail → set that ticker in MetaScalp on the maps' connection.
 results.addEventListener("click", (e) => {
@@ -454,7 +579,7 @@ function renderConnections(conns) {
     card.innerHTML = `
       <div class="name">${baseName}${count}</div>
       <div class="actions">
-        <button class="maps-btn" ${tickerCount ? "" : "disabled"}>Show maps</button>
+        <button class="maps-btn" title="Show maps" ${tickerCount ? "" : "disabled"}>▦</button>
       </div>`;
     grid.appendChild(card);
     card.querySelector(".maps-btn").addEventListener("click", (e) => showMaps(c, e.target));
@@ -463,6 +588,10 @@ function renderConnections(conns) {
 
 async function run() {
   refreshBtn.disabled = true;
+  // Invalidate / abort any in-flight map scan so it can't render after refresh.
+  scanToken++;
+  if (scanAbort) { scanAbort.abort(); scanAbort = null; }
+  scanBtn = null;
   grid.innerHTML = "";
   results.innerHTML = "";
   galleryCtx = null;
@@ -506,6 +635,8 @@ async function run() {
 }
 
 refreshBtn.addEventListener("click", run);
+loadTune();   // restore saved tune (or defaults) into the inputs + settings
+loadPrefs();  // restore timeframe / min delta / binding
 run();
 </script>
 </body>
