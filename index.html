@@ -230,6 +230,20 @@ let scanToken = 0;          // bumped each scan; a stale scan bails when it sees
 let scanAbort = null;       // AbortController for the in-flight scan's fetches
 let scanBtn = null;         // the Show-maps button currently disabled by a running scan
 
+// Moon-phase spinner for the scan progress line.
+const MOONS = ["🌑", "🌒", "🌓", "🌔", "🌕", "🌖", "🌗", "🌘"];
+let spinnerTimer = null, spinnerFrame = 0, progressText = "";
+function startSpinner() {
+  if (spinnerTimer) return;
+  spinnerTimer = setInterval(() => {
+    spinnerFrame = (spinnerFrame + 1) % MOONS.length;
+    infoBar.textContent = `${MOONS[spinnerFrame]} ${progressText}`;
+  }, 120);
+}
+function stopSpinner() {
+  if (spinnerTimer) { clearInterval(spinnerTimer); spinnerTimer = null; }
+}
+
 // Case-insensitive key lookup — the live API mixes lowercase wrapper keys with PascalCase
 // inner fields, so never assume one casing (see CLAUDE.md).
 function pick(obj, ...keys) {
@@ -410,7 +424,8 @@ async function showMaps(conn, btn) {
   lastConn = conn;
   const label = conn.Name ?? `Connection ${conn.Id}`;
   results.innerHTML = "";
-  infoBar.textContent = `Fetching ${tickers.length} cluster snapshot(s) for ${label} (${timeFrame})…`;
+  progressText = `Fetching ${tickers.length} cluster snapshot(s) for ${label} (${timeFrame})…`;
+  startSpinner();
 
   let done = 0;
   const raws = await runPool(tickers, async (ticker) => {
@@ -421,13 +436,14 @@ async function showMaps(conn, btn) {
       if (snap) raw = buildRaw(snap);
     } catch (_) {}
     done++;
-    if (myToken === scanToken && (done % 25 === 0 || done === tickers.length)) {
-      infoBar.textContent = `Fetched ${done}/${tickers.length} snapshot(s) for ${label}…`;
+    if (myToken === scanToken && (done % 5 === 0 || done === tickers.length)) {
+      progressText = `Fetched ${done}/${tickers.length} snapshot(s) for ${label}…`;
     }
     return raw ? { ticker, raw } : null;
   }, FETCH_CONCURRENCY);
 
   if (myToken !== scanToken) return; // a newer scan superseded this one — drop our results
+  stopSpinner();
   scanAbort = null;
   scanBtn = null;
   btn.disabled = false;
@@ -592,6 +608,7 @@ async function run() {
   scanToken++;
   if (scanAbort) { scanAbort.abort(); scanAbort = null; }
   scanBtn = null;
+  stopSpinner();
   grid.innerHTML = "";
   results.innerHTML = "";
   galleryCtx = null;
