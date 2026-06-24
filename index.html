@@ -41,9 +41,17 @@
     background: #12151b; border: 1px solid var(--border); border-radius: 8px;
     padding: 9px 14px; margin-bottom: 16px;
   }
-  .tune-title { font-size: 11px; font-weight: 700; text-transform: uppercase;
-    letter-spacing: .8px; color: var(--muted); margin-right: 2px; }
-  .reset-btn { margin-left: auto; padding: 5px 11px; font-size: 12px; }
+  .tune-toggle {
+    font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .8px;
+    color: var(--muted); background: transparent; border: none; padding: 0; cursor: pointer;
+  }
+  .tune-toggle:hover { color: var(--text); border: none; }
+  .tune-controls { display: flex; align-items: center; flex-wrap: wrap; gap: 14px; flex: 1; }
+  /* keep the spinner arrows always visible (not just on hover) */
+  .tune-controls input[type=number]::-webkit-inner-spin-button { opacity: 1; }
+  .tune-controls.folded { display: none; }
+  .reset-btn { margin-left: auto; padding: 5px 11px; font-size: 12px; background: transparent; border: none; color: var(--muted); }
+  .reset-btn:hover { color: var(--text); border: none; }
   .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); flex: none; }
   .dot.searching { background: var(--amber); animation: pulse 1s infinite; }
   .dot.online { background: var(--green); }
@@ -65,13 +73,10 @@
   .card .name { font-size: 12.5px; font-weight: 600; color: var(--text); }
   .card .actions { display: flex; gap: 6px; }
   .card .actions button {
-    padding: 4px 9px; font-size: 11px; background: #222833; color: var(--text);
-    border: 1px solid var(--border);
-  }
-  .card .actions button {
     width: 34px; height: 34px; min-width: 34px; padding: 0; flex: none;
     display: flex; align-items: center; justify-content: center;
     font-size: 16px; line-height: 1; border-radius: 6px;
+    background: #222833; color: var(--text); border: 1px solid var(--border);
   }
   .card .actions button:hover { border-color: var(--accent); filter: none; }
   .card .actions button:disabled { opacity: 0.4; }
@@ -99,7 +104,7 @@
     <div class="controls">
       <div class="field">Timeframe
         <select id="tfSelect">
-          <option>M1</option><option selected>M5</option><option>M15</option>
+          <option>M1</option><option selected>M5</option><option>M10</option><option>M15</option>
           <option>M30</option><option>H1</option><option>H4</option><option>D1</option>
         </select>
       </div>
@@ -118,14 +123,16 @@
   </header>
 
   <div class="tuning-bar">
-    <span class="tune-title">Tuning</span>
-    <div class="field">Rows <input id="rowsInput" type="number" min="5" max="160" step="1" value="38" style="width:52px" /></div>
-    <div class="field">Height <input id="hInput" type="number" min="40" max="500" step="2" value="84" style="width:52px" /></div>
-    <div class="field">Width <input id="wInput" type="number" min="40" max="500" step="2" value="120" style="width:52px" /></div>
-    <div class="field">Width-exp <input id="wExpInput" type="number" min="0.1" max="2" step="0.05" value="0.5" style="width:52px" /></div>
-    <div class="field">Bright-exp <input id="bExpInput" type="number" min="0.1" max="3" step="0.05" value="0.7" style="width:52px" /></div>
-    <div class="field">Floor <input id="floorInput" type="number" min="0" max="0.5" step="0.01" value="0.05" style="width:52px" /></div>
-    <button id="resetTuneBtn" class="reset-btn">Reset defaults</button>
+    <button id="tuneToggle" class="tune-toggle"><span id="tuneCaret">▸</span> Tuning</button>
+    <div class="tune-controls folded" id="tuneControls">
+      <div class="field">Max rows <input id="maxRowsInput" type="number" min="5" max="300" step="1" value="100" title="auto-fit cap" style="width:74px" /></div>
+      <div class="field">Height <input id="hInput" type="number" min="40" max="500" step="2" value="240" style="width:74px" /></div>
+      <div class="field">Width <input id="wInput" type="number" min="40" max="500" step="2" value="120" style="width:74px" /></div>
+      <div class="field">Width-exp <input id="wExpInput" type="number" min="0.1" max="2" step="0.05" value="1" style="width:74px" /></div>
+      <div class="field">Bright-exp <input id="bExpInput" type="number" min="0.1" max="3" step="0.05" value="1" style="width:74px" /></div>
+      <div class="field">Floor <input id="floorInput" type="number" min="0" max="0.5" step="0.01" value="0.3" style="width:74px" /></div>
+      <button id="resetTuneBtn" class="reset-btn">Reset defaults</button>
+    </div>
   </div>
 
   <div class="info-bar" id="infoBar">Scanning for a running MetaScalp instance&hellip;</div>
@@ -135,9 +142,10 @@
 <script>
 // MetaScalp delta cluster maps — see MetaScalp-Api.md
 // Discovery → connections → main-group tickers, all over REST. Clicking a market renders a
-// contact sheet of miniature footprints — one per ticker with cluster data. Each thumbnail
-// is 10 time bars × price levels (high at top); per level the bar width = total volume,
-// color = side (green buy / red sell), brightness = delta dominance. AskSize/BidSize are USD.
+// contact sheet of miniature delta footprints — one per ticker with cluster data. Each
+// thumbnail is the time columns × price levels (high at top); balanced levels drop out and
+// per one-sided level: color = side (green buy / red sell), width + brightness = |delta|
+// vs the map's max delta. Rows auto-fit (centered, fixed bar height). AskSize/BidSize are USD.
 const HOST = "127.0.0.1";
 const PORT_START = 17845;
 const PORT_END = 17855;
@@ -148,11 +156,11 @@ const PAGE = 80;             // thumbnails per "Show more" page
 // Live-tunable render settings (read from the UI; persisted in localStorage).
 const TUNE_KEY = "orashkatu.tune";
 const DEFAULTS = {
-  rows: 38,        // price bins per thumbnail
-  w: 120, h: 84,   // canvas display size (CSS px); backing store = ×dpr
-  widthExp: 0.5,   // bar width curve: w ∝ (delta/maxDelta)^widthExp  (0.5 = sqrt)
-  brightExp: 0.7,  // brightness curve: alpha ∝ (delta/maxDelta)^brightExp (higher = small dimmer)
-  floor: 0.05,     // minimum brightness for the faintest shown delta
+  maxRows: 100,    // rows auto-fit to the data, capped here; beyond this it bins down
+  w: 120, h: 240,  // canvas display size (CSS px); backing store = ×dpr
+  widthExp: 1,     // bar width curve: w ∝ (delta/maxDelta)^widthExp  (1 = linear)
+  brightExp: 1,    // brightness curve: alpha ∝ (delta/maxDelta)^brightExp (1 = linear)
+  floor: 0.3,      // minimum brightness for the faintest shown delta
 };
 const settings = { ...DEFAULTS };
 
@@ -165,19 +173,27 @@ const refreshBtn = document.getElementById("refreshBtn");
 const tfSelect = document.getElementById("tfSelect");
 const filterInput = document.getElementById("filterInput");
 const minDeltaInput = document.getElementById("minDeltaInput");
-const rowsInput = document.getElementById("rowsInput");
+const maxRowsInput = document.getElementById("maxRowsInput");
 const hInput = document.getElementById("hInput");
 const wInput = document.getElementById("wInput");
 const wExpInput = document.getElementById("wExpInput");
 const bExpInput = document.getElementById("bExpInput");
 const floorInput = document.getElementById("floorInput");
 const resetTuneBtn = document.getElementById("resetTuneBtn");
-const tuneInputs = [rowsInput, hInput, wInput, wExpInput, bExpInput, floorInput];
+const tuneToggle = document.getElementById("tuneToggle");
+const tuneCaret = document.getElementById("tuneCaret");
+const tuneControls = document.getElementById("tuneControls");
+const tuneInputs = [maxRowsInput, hInput, wInput, wExpInput, bExpInput, floorInput];
+
+function setTuneFolded(folded) {
+  tuneControls.classList.toggle("folded", folded);
+  tuneCaret.textContent = folded ? "▸" : "▾";
+}
 
 // Pull the tuning controls into `settings` (clamped to sane ranges).
 function readSettings() {
   const clamp = (v, lo, hi, dflt) => Number.isFinite(v) ? Math.min(hi, Math.max(lo, v)) : dflt;
-  settings.rows = Math.round(clamp(parseInt(rowsInput.value, 10), 5, 160, DEFAULTS.rows));
+  settings.maxRows = Math.round(clamp(parseInt(maxRowsInput.value, 10), 5, 300, DEFAULTS.maxRows));
   settings.h = Math.round(clamp(parseFloat(hInput.value), 40, 500, DEFAULTS.h));
   settings.w = Math.round(clamp(parseFloat(wInput.value), 40, 500, DEFAULTS.w));
   settings.widthExp = clamp(parseFloat(wExpInput.value), 0.1, 2, DEFAULTS.widthExp);
@@ -187,7 +203,8 @@ function readSettings() {
 
 // Put a settings object into the input boxes.
 function applyToInputs(s) {
-  rowsInput.value = s.rows; hInput.value = s.h; wInput.value = s.w;
+  maxRowsInput.value = s.maxRows;
+  hInput.value = s.h; wInput.value = s.w;
   wExpInput.value = s.widthExp; bExpInput.value = s.brightExp; floorInput.value = s.floor;
 }
 
@@ -209,6 +226,7 @@ function savePrefs() {
   try {
     localStorage.setItem(PREF_KEY, JSON.stringify({
       tf: tfSelect.value, minDelta: minDeltaInput.value, binding: bindingInput.value,
+      tuneFolded: tuneControls.classList.contains("folded"),
     }));
   } catch (_) {}
 }
@@ -218,6 +236,7 @@ function loadPrefs() {
     if (p.tf) tfSelect.value = p.tf;
     if (p.minDelta != null) minDeltaInput.value = p.minDelta;
     if (p.binding != null) bindingInput.value = p.binding;
+    setTuneFolded(p.tuneFolded !== false); // folded by default
   } catch (_) {}
 }
 const bindingInput = document.getElementById("bindingInput");
@@ -335,6 +354,7 @@ async function fetchClusterSnapshot(port, connId, ticker, timeFrame, signal) {
 function buildRaw(snap) {
   const cols = pick(snap, "Columns") || [];
   if (!cols.length) return null;
+  const inc = Number(pick(snap, "PriceIncrement")) || 0; // price step, for auto-fit row count
   let lo = Infinity, hi = -Infinity, rawMaxDelta = 0;
   const out = [];
   for (const col of cols) {
@@ -353,7 +373,14 @@ function buildRaw(snap) {
     out.push(lv);
   }
   if (!Number.isFinite(lo) || !Number.isFinite(hi) || rawMaxDelta <= 0) return null;
-  return { cols: out, lo, hi, rawMaxDelta };
+  return { cols: out, lo, hi, inc, rawMaxDelta };
+}
+
+// Row count for a thumbnail: auto-fit (one row per price step in the range), capped at
+// maxRows — beyond that it bins down to maxRows.
+function effectiveRows(raw) {
+  const natural = raw.inc > 0 ? Math.round((raw.hi - raw.lo) / raw.inc) + 1 : settings.maxRows;
+  return Math.max(4, Math.min(settings.maxRows, natural));
 }
 
 // Bin raw levels into a C x rows grid (high price at top). maxDelta = biggest binned
@@ -387,7 +414,11 @@ function drawThumb(cv, m) {
   const ctx = cv.getContext("2d");
   ctx.fillStyle = "#0b0d11";
   ctx.fillRect(0, 0, cv.width, cv.height);
-  const cw = cv.width / m.C, ch = cv.height / m.R;
+  const cw = cv.width / m.C;
+  // Fixed per-level bar height (= frame / maxRows), so bars are the same size on every
+  // chart. A chart with fewer levels uses fewer bars, centered vertically (empty top/bottom).
+  const barH = cv.height / settings.maxRows;
+  const yOff = (cv.height - m.R * barH) / 2;
   const maxDelta = m.maxDelta || 1;
   for (let c = 0; c < m.C; c++) {
     for (let r = 0; r < m.R; r++) {
@@ -400,7 +431,7 @@ function drawThumb(cv, m) {
       const alpha = settings.floor + (1 - settings.floor) * Math.pow(nv, settings.brightExp);
       const col = b >= a ? "46,214,104" : "236,72,60";
       ctx.fillStyle = `rgba(${col},${alpha.toFixed(3)})`;
-      ctx.fillRect(c * cw, r * ch, w, ch + 0.6);
+      ctx.fillRect(c * cw, yOff + r * barH, w, barH + 0.6);
     }
   }
 }
@@ -494,7 +525,7 @@ function renderGallery() {
     cv.height = Math.round(settings.h * dpr);
     cv.style.width = settings.w + "px";         // displayed 1:1, no CSS scaling/blur
     cv.style.height = settings.h + "px";
-    drawThumb(cv, buildModel(it.raw, settings.rows));
+    drawThumb(cv, buildModel(it.raw, effectiveRows(it.raw)));
     card.appendChild(cv);
 
     const lab = document.createElement("div");
@@ -549,6 +580,10 @@ for (const el of tuneInputs) {
 }
 resetTuneBtn.addEventListener("click", () => {
   applyToInputs(DEFAULTS); readSettings(); saveTune(); if (galleryCtx) renderGallery();
+});
+tuneToggle.addEventListener("click", () => {
+  setTuneFolded(!tuneControls.classList.contains("folded"));
+  savePrefs();
 });
 
 // Click a thumbnail → set that ticker in MetaScalp on the maps' connection.
