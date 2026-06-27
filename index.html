@@ -64,22 +64,20 @@
   button:hover { border-color: var(--accent); }
   button:disabled { opacity: 0.4; cursor: default; }
   .info-bar { font-size: 12px; color: var(--muted); margin-bottom: 16px; }
+  .info-bar .dur { color: #4ade80; font-weight: 700; }
   .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 8px; }
   .card {
-    background: #14171d; border: 1px solid var(--border); border-radius: 6px; padding: 9px 11px;
-    display: flex; align-items: center; justify-content: space-between; gap: 10px;
+    position: relative; overflow: hidden; cursor: pointer;
+    background: #14171d; border: 1px solid var(--border); border-radius: 6px; padding: 11px;
+    display: flex; align-items: center;
   }
-  .card:hover { border-color: #333a47; }
-  .card .name { font-size: 12.5px; font-weight: 600; color: var(--text); }
-  .card .actions { display: flex; gap: 6px; }
-  .card .actions button {
-    width: 34px; height: 34px; min-width: 34px; padding: 0; flex: none;
-    display: flex; align-items: center; justify-content: center;
-    font-size: 16px; line-height: 1; border-radius: 6px;
-    background: #222833; color: var(--text); border: 1px solid var(--border);
+  .card:hover { border-color: #3a4250; }
+  .card.disabled { opacity: 0.45; cursor: default; }
+  .card .name { position: relative; z-index: 1; font-size: 12.5px; font-weight: 600; color: var(--text); }
+  .card-fill {
+    position: absolute; left: 0; top: 0; bottom: 0; width: 0; z-index: 0;
+    background: rgba(22, 163, 74, 0.4); transition: width 0.25s ease;
   }
-  .card .actions button:hover { border-color: var(--accent); filter: none; }
-  .card .actions button:disabled { opacity: 0.4; }
   .empty { text-align: center; color: var(--muted); padding: 48px 0; font-size: 14px; }
 
   #results { margin-top: 26px; }
@@ -114,6 +112,9 @@
       <div class="field">Min delta $
         <input id="minDeltaInput" type="number" min="0" step="1000" value="0" style="width:90px" />
       </div>
+      <div class="field">Max delta $
+        <input id="maxDeltaInput" type="number" min="0" step="1000" value="0" title="0 = no cap" style="width:90px" />
+      </div>
       <div class="field">Binding
         <input id="bindingInput" type="text" placeholder="none" maxlength="3" style="width:54px" />
       </div>
@@ -125,9 +126,9 @@
   <div class="tuning-bar">
     <button id="tuneToggle" class="tune-toggle"><span id="tuneCaret">▸</span> Tuning</button>
     <div class="tune-controls folded" id="tuneControls">
-      <div class="field">Max rows <input id="maxRowsInput" type="number" min="5" max="300" step="1" value="100" title="auto-fit cap" style="width:74px" /></div>
-      <div class="field">Height <input id="hInput" type="number" min="40" max="500" step="2" value="240" style="width:74px" /></div>
-      <div class="field">Width <input id="wInput" type="number" min="40" max="500" step="2" value="120" style="width:74px" /></div>
+      <div class="field">Max rows <input id="maxRowsInput" type="number" min="5" max="300" step="1" value="80" title="auto-fit cap" style="width:74px" /></div>
+      <div class="field">Height <input id="hInput" type="number" min="40" max="500" step="2" value="224" style="width:74px" /></div>
+      <div class="field">Width <input id="wInput" type="number" min="40" max="500" step="2" value="224" style="width:74px" /></div>
       <div class="field">Width-exp <input id="wExpInput" type="number" min="0.1" max="2" step="0.05" value="1" style="width:74px" /></div>
       <div class="field">Bright-exp <input id="bExpInput" type="number" min="0.1" max="3" step="0.05" value="1" style="width:74px" /></div>
       <div class="field">Floor <input id="floorInput" type="number" min="0" max="0.5" step="0.01" value="0.3" style="width:74px" /></div>
@@ -156,8 +157,8 @@ const PAGE = 80;             // thumbnails per "Show more" page
 // Live-tunable render settings (read from the UI; persisted in localStorage).
 const TUNE_KEY = "orashkatu.tune";
 const DEFAULTS = {
-  maxRows: 100,    // rows auto-fit to the data, capped here; beyond this it bins down
-  w: 120, h: 240,  // canvas display size (CSS px); backing store = ×dpr
+  maxRows: 80,     // rows auto-fit to the data, capped here; beyond this it bins down
+  w: 224, h: 224,  // canvas display size (CSS px); backing store = ×dpr
   widthExp: 1,     // bar width curve: w ∝ (delta/maxDelta)^widthExp  (1 = linear)
   brightExp: 1,    // brightness curve: alpha ∝ (delta/maxDelta)^brightExp (1 = linear)
   floor: 0.3,      // minimum brightness for the faintest shown delta
@@ -173,6 +174,7 @@ const refreshBtn = document.getElementById("refreshBtn");
 const tfSelect = document.getElementById("tfSelect");
 const filterInput = document.getElementById("filterInput");
 const minDeltaInput = document.getElementById("minDeltaInput");
+const maxDeltaInput = document.getElementById("maxDeltaInput");
 const maxRowsInput = document.getElementById("maxRowsInput");
 const hInput = document.getElementById("hInput");
 const wInput = document.getElementById("wInput");
@@ -225,8 +227,8 @@ const PREF_KEY = "orashkatu.prefs";
 function savePrefs() {
   try {
     localStorage.setItem(PREF_KEY, JSON.stringify({
-      tf: tfSelect.value, minDelta: minDeltaInput.value, binding: bindingInput.value,
-      tuneFolded: tuneControls.classList.contains("folded"),
+      tf: tfSelect.value, minDelta: minDeltaInput.value, maxDelta: maxDeltaInput.value,
+      binding: bindingInput.value, tuneFolded: tuneControls.classList.contains("folded"),
     }));
   } catch (_) {}
 }
@@ -235,6 +237,7 @@ function loadPrefs() {
     const p = JSON.parse(localStorage.getItem(PREF_KEY) || "{}");
     if (p.tf) tfSelect.value = p.tf;
     if (p.minDelta != null) minDeltaInput.value = p.minDelta;
+    if (p.maxDelta != null) maxDeltaInput.value = p.maxDelta;
     if (p.binding != null) bindingInput.value = p.binding;
     setTuneFolded(p.tuneFolded !== false); // folded by default
   } catch (_) {}
@@ -247,7 +250,19 @@ let galleryCtx = null;      // { label, timeFrame, items:[{ticker, model}] }
 let shownCount = 0;
 let scanToken = 0;          // bumped each scan; a stale scan bails when it sees a newer token
 let scanAbort = null;       // AbortController for the in-flight scan's fetches
-let scanBtn = null;         // the Show-maps button currently disabled by a running scan
+let scanCard = null;        // the connection card currently scanning (for its progress fill)
+
+function setCardFill(card, pct) {
+  const f = card && card.querySelector(".card-fill");
+  if (f) f.style.width = Math.max(0, Math.min(100, pct)) + "%";
+}
+
+// Format a millisecond duration: "6.3s" under a minute, else "1m 2s" / "2m 24s".
+function fmtDuration(ms) {
+  const s = ms / 1000;
+  if (s < 60) return s.toFixed(1) + "s";
+  return `${Math.floor(s / 60)}m ${Math.round(s % 60)}s`;
+}
 
 // Moon-phase spinner for the scan progress line.
 const MOONS = ["🌑", "🌒", "🌓", "🌔", "🌕", "🌖", "🌗", "🌘"];
@@ -438,26 +453,28 @@ function drawThumb(cv, m) {
 
 // ---- Build + render the contact sheet for a connection ----
 
-async function showMaps(conn, btn) {
+async function showMaps(conn, card) {
   const tickers = conn.MainGroup ? conn.MainGroup.tickers : [];
   if (!tickers.length) return;
   const timeFrame = tfSelect.value;
 
-  // Cancel any scan already running, and re-enable its button, before starting this one.
+  // Cancel any scan already running, and clear every card's fill (incl. a previously
+  // completed green one), before starting this one.
   if (scanAbort) scanAbort.abort();
-  if (scanBtn && scanBtn !== btn) scanBtn.disabled = false;
+  grid.querySelectorAll(".card-fill").forEach(f => { f.style.width = "0%"; });
   const myToken = ++scanToken;
   scanAbort = new AbortController();
   const signal = scanAbort.signal;
-  scanBtn = btn;
+  scanCard = card;
 
-  btn.disabled = true;
+  setCardFill(card, 0);
   lastConn = conn;
   const label = conn.Name ?? `Connection ${conn.Id}`;
   results.innerHTML = "";
   progressText = `Fetching ${tickers.length} cluster snapshot(s) for ${label} (${timeFrame})…`;
   startSpinner();
 
+  const t0 = performance.now();
   let done = 0;
   const raws = await runPool(tickers, async (ticker) => {
     if (signal.aborted) return null;
@@ -469,6 +486,7 @@ async function showMaps(conn, btn) {
     done++;
     if (myToken === scanToken && (done % 5 === 0 || done === tickers.length)) {
       progressText = `Fetched ${done}/${tickers.length} snapshot(s) for ${label}…`;
+      setCardFill(card, (done / tickers.length) * 100); // green fill, left → right
     }
     return raw ? { ticker, raw } : null;
   }, FETCH_CONCURRENCY);
@@ -476,11 +494,12 @@ async function showMaps(conn, btn) {
   if (myToken !== scanToken) return; // a newer scan superseded this one — drop our results
   stopSpinner();
   scanAbort = null;
-  scanBtn = null;
-  btn.disabled = false;
+  scanCard = null;
+  setCardFill(card, 100); // keep the card green until the next scan
+  const dur = fmtDuration(performance.now() - t0);
   const items = raws.filter(Boolean);
   if (!items.length) {
-    infoBar.textContent = `${label}: no cluster data for any ticker (${tickers.length} scanned).`;
+    infoBar.innerHTML = `${label}: no cluster data for any ticker (${tickers.length} scanned in <span class="dur">${dur}</span>).`;
     results.innerHTML = `<div class="empty">No delta cluster data.</div>`;
     return;
   }
@@ -489,8 +508,7 @@ async function showMaps(conn, btn) {
   shownCount = PAGE;
   filterInput.value = "";
   renderGallery();
-  infoBar.textContent = `${label}: ${items.length}/${tickers.length} ticker(s) with cluster data · ${timeFrame}. `
-    + `Scan the maps; type in Filter to narrow; click a map to set its ticker.`;
+  infoBar.innerHTML = `${label}: ${items.length}/${tickers.length} ticker(s) with cluster data · ${timeFrame} · <span class="dur">${dur}</span>.`;
 }
 
 function renderGallery() {
@@ -499,8 +517,11 @@ function renderGallery() {
   const { label, timeFrame, items } = galleryCtx;
   const q = filterInput.value.trim().toUpperCase();
   const minD = Math.max(0, parseFloat(minDeltaInput.value) || 0);
+  const maxD = Math.max(0, parseFloat(maxDeltaInput.value) || 0); // 0 = no cap
   const filtered = items.filter(it =>
-    (!q || it.ticker.toUpperCase().includes(q)) && it.raw.rawMaxDelta >= minD);
+    (!q || it.ticker.toUpperCase().includes(q)) &&
+    it.raw.rawMaxDelta >= minD &&
+    (maxD <= 0 || it.raw.rawMaxDelta <= maxD));
   const shown = filtered.slice(0, shownCount);
 
   results.innerHTML = "";
@@ -568,10 +589,12 @@ function onFilterChange() {
 }
 filterInput.addEventListener("input", onFilterChange);
 minDeltaInput.addEventListener("input", onFilterChange);
+maxDeltaInput.addEventListener("input", onFilterChange);
 
 // Persist everyday prefs on change (timeframe applies on next Show maps).
 tfSelect.addEventListener("change", savePrefs);
 minDeltaInput.addEventListener("input", savePrefs);
+maxDeltaInput.addEventListener("input", savePrefs);
 bindingInput.addEventListener("input", savePrefs);
 
 // Tuning controls — re-render with new settings (no refetch), then persist.
@@ -623,17 +646,14 @@ function renderConnections(conns) {
   }
   for (const c of conns) {
     const card = document.createElement("div");
-    card.className = "card";
     const baseName = c.Name ?? `${c.Exchange} · ${c.Market}`;
     const count = typeof c.MainGroupCount === "number" ? `(${c.MainGroupCount})` : "";
     const tickerCount = c.MainGroup ? c.MainGroup.tickers.length : 0;
-    card.innerHTML = `
-      <div class="name">${baseName}${count}</div>
-      <div class="actions">
-        <button class="maps-btn" title="Show maps" ${tickerCount ? "" : "disabled"}>▦</button>
-      </div>`;
+    card.className = "card" + (tickerCount ? "" : " disabled");
+    card.title = tickerCount ? "Click to scan maps" : "No tickers";
+    card.innerHTML = `<div class="card-fill"></div><div class="name">${baseName}${count}</div>`;
     grid.appendChild(card);
-    card.querySelector(".maps-btn").addEventListener("click", (e) => showMaps(c, e.target));
+    if (tickerCount) card.addEventListener("click", () => showMaps(c, card));
   }
 }
 
@@ -642,7 +662,7 @@ async function run() {
   // Invalidate / abort any in-flight map scan so it can't render after refresh.
   scanToken++;
   if (scanAbort) { scanAbort.abort(); scanAbort = null; }
-  scanBtn = null;
+  if (scanCard) { setCardFill(scanCard, 0); scanCard = null; }
   stopSpinner();
   grid.innerHTML = "";
   results.innerHTML = "";
@@ -677,7 +697,7 @@ async function run() {
       }
     }));
     infoBar.textContent = `Connected to MetaScalp v${found.version} on port ${found.port} — ${conns.length} connection(s). `
-      + `Pick a timeframe, then Show maps on a connection.`;
+      + `Pick a timeframe, then click a connection to scan its maps.`;
     renderConnections(conns);
   } catch (err) {
     infoBar.textContent = `Failed to load connections: ${err.message}`;
