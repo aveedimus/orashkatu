@@ -79,6 +79,13 @@
     width: 15px; height: 15px; border-radius: 3px; font-size: 9px; font-weight: 800; }
   .mk.spot { background: #6b521f; color: #f0c674; }
   .mk.fut  { background: #1f5e38; color: #74e39b; }
+  .age { position: relative; z-index: 1; margin-left: auto; flex: none; padding-left: 8px;
+    font-size: 10px; font-weight: 600; }
+  .age-fresh { color: #4ade80; }
+  .age-mid   { color: var(--muted); }
+  .age-old   { color: #fbbf24; }
+  .age-stale { color: #f87171; }
+  .age-never { color: #4b515c; }
   .card-fill {
     position: absolute; left: 0; top: 0; bottom: 0; width: 0; z-index: 0;
     background: rgba(22, 163, 74, 0.4); transition: width 0.25s ease;
@@ -264,6 +271,47 @@ function setCardFill(card, pct) {
 
 // Spot connection? (MarketType 0, or "spot" in the market name.)
 function isSpot(c) { return pick(c, "MarketType") === 0 || /spot/i.test(c.Market || ""); }
+
+// Last-scanned timestamps, keyed by exchange+market (survives connection-Id rotation).
+const SCAN_KEY = "orashkatu.scans";
+let scanTimes = {};
+try { scanTimes = JSON.parse(localStorage.getItem(SCAN_KEY) || "{}"); } catch (_) {}
+function connKey(c) { return `${pick(c, "ExchangeId")}:${pick(c, "MarketType")}`; }
+function markScanned(c) {
+  scanTimes[connKey(c)] = Date.now();
+  try { localStorage.setItem(SCAN_KEY, JSON.stringify(scanTimes)); } catch (_) {}
+  refreshAges();
+}
+function ageText(ts) {
+  if (!ts) return "—";
+  const s = (Date.now() - ts) / 1000;
+  if (s < 60) return "now";
+  if (s < 3600) return Math.floor(s / 60) + "m";       // < 1h: 1-minute steps
+  if (s < 86400) {                                      // 1h–1d: 10-minute steps
+    const h = Math.floor(s / 3600);
+    const m = Math.floor((s % 3600) / 600) * 10;
+    return m ? `${h}h ${m}m` : `${h}h`;
+  }
+  const d = Math.floor(s / 86400);                      // ≥ 1d: 1-hour steps
+  const h = Math.floor((s % 86400) / 3600);
+  return h ? `${d}d ${h}h` : `${d}d`;
+}
+function ageClass(ts) {
+  if (!ts) return "age-never";
+  const s = (Date.now() - ts) / 1000;
+  if (s < 900) return "age-fresh";     // green  < 15m
+  if (s < 1800) return "age-old";      // yellow < 30m
+  if (s < 3600) return "age-stale";    // red    < 1h
+  return "age-mid";                    // muted  older
+}
+// Update the age labels on existing cards in place (cheap; runs on a 30s interval).
+function refreshAges() {
+  for (const el of grid.querySelectorAll(".card .age")) {
+    const ts = scanTimes[el.parentElement.dataset.key];
+    el.textContent = ageText(ts);
+    el.className = "age " + ageClass(ts);
+  }
+}
 
 // Format a millisecond duration: "6.3s" under a minute, else "1m 2s" / "2m 24s".
 function fmtDuration(ms) {
@@ -505,6 +553,7 @@ async function showMaps(conn, card) {
   scanAbort = null;
   scanCard = null;
   setCardFill(card, 100); // keep the card green until the next scan
+  markScanned(conn);      // stamp + refresh the "last scanned" age labels
   const dur = fmtDuration(performance.now() - t0);
   const items = raws.filter(Boolean);
   if (!items.length) {
@@ -664,7 +713,10 @@ function renderConnections(conns) {
     card.title = tickerCount ? "Click to scan maps" : "No tickers";
     const spot = isSpot(c);
     const mk = `<span class="mk ${spot ? "spot" : "fut"}" title="${spot ? "Spot" : "Futures"}">${spot ? "S" : "F"}</span>`;
-    card.innerHTML = `<div class="card-fill"></div><div class="name">${mk}${baseName}${count}</div>`;
+    const ts = scanTimes[connKey(c)];
+    card.dataset.key = connKey(c);
+    card.innerHTML = `<div class="card-fill"></div><div class="name">${mk}${baseName}${count}</div>`
+      + `<span class="age ${ageClass(ts)}" title="last scanned">${ageText(ts)}</span>`;
     grid.appendChild(card);
     if (tickerCount) card.addEventListener("click", () => showMaps(c, card));
   }
@@ -720,6 +772,7 @@ async function run() {
 }
 
 refreshBtn.addEventListener("click", run);
+setInterval(refreshAges, 30000); // keep "last scanned" labels current (cheap, text-only)
 loadTune();   // restore saved tune (or defaults) into the inputs + settings
 loadPrefs();  // restore timeframe / min delta / binding
 run();
