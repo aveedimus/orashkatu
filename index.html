@@ -469,6 +469,7 @@ async function showMaps(conn, card) {
 
   setCardFill(card, 0);
   lastConn = conn;
+  galleryCtx = null;        // drop the previous exchange's data so a mid-scan filter can't revive it
   const label = conn.Name ?? `Connection ${conn.Id}`;
   results.innerHTML = "";
   progressText = `Fetching ${tickers.length} cluster snapshot(s) for ${label} (${timeFrame})…`;
@@ -591,7 +592,7 @@ filterInput.addEventListener("input", onFilterChange);
 minDeltaInput.addEventListener("input", onFilterChange);
 maxDeltaInput.addEventListener("input", onFilterChange);
 
-// Persist everyday prefs on change (timeframe applies on next Show maps).
+// Persist everyday prefs on change (timeframe applies on the next scan).
 tfSelect.addEventListener("change", savePrefs);
 minDeltaInput.addEventListener("input", savePrefs);
 maxDeltaInput.addEventListener("input", savePrefs);
