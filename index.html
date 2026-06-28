@@ -73,7 +73,12 @@
   }
   .card:hover { border-color: #3a4250; }
   .card.disabled { opacity: 0.45; cursor: default; }
-  .card .name { position: relative; z-index: 1; font-size: 12.5px; font-weight: 600; color: var(--text); }
+  .card .name { position: relative; z-index: 1; font-size: 12.5px; font-weight: 600; color: var(--text);
+    display: flex; align-items: center; gap: 6px; }
+  .mk { flex: none; display: inline-flex; align-items: center; justify-content: center;
+    width: 15px; height: 15px; border-radius: 3px; font-size: 9px; font-weight: 800; }
+  .mk.spot { background: #6b521f; color: #f0c674; }
+  .mk.fut  { background: #1f5e38; color: #74e39b; }
   .card-fill {
     position: absolute; left: 0; top: 0; bottom: 0; width: 0; z-index: 0;
     background: rgba(22, 163, 74, 0.4); transition: width 0.25s ease;
@@ -256,6 +261,9 @@ function setCardFill(card, pct) {
   const f = card && card.querySelector(".card-fill");
   if (f) f.style.width = Math.max(0, Math.min(100, pct)) + "%";
 }
+
+// Spot connection? (MarketType 0, or "spot" in the market name.)
+function isSpot(c) { return pick(c, "MarketType") === 0 || /spot/i.test(c.Market || ""); }
 
 // Format a millisecond duration: "6.3s" under a minute, else "1m 2s" / "2m 24s".
 function fmtDuration(ms) {
@@ -645,6 +653,8 @@ function renderConnections(conns) {
     grid.innerHTML = `<div class="empty">No active exchange connections.</div>`;
     return;
   }
+  conns = [...conns].sort((a, b) =>
+    (pick(a, "ExchangeId") || 0) - (pick(b, "ExchangeId") || 0) || (isSpot(a) ? 0 : 1) - (isSpot(b) ? 0 : 1));
   for (const c of conns) {
     const card = document.createElement("div");
     const baseName = c.Name ?? `${c.Exchange} · ${c.Market}`;
@@ -652,7 +662,9 @@ function renderConnections(conns) {
     const tickerCount = c.MainGroup ? c.MainGroup.tickers.length : 0;
     card.className = "card" + (tickerCount ? "" : " disabled");
     card.title = tickerCount ? "Click to scan maps" : "No tickers";
-    card.innerHTML = `<div class="card-fill"></div><div class="name">${baseName}${count}</div>`;
+    const spot = isSpot(c);
+    const mk = `<span class="mk ${spot ? "spot" : "fut"}" title="${spot ? "Spot" : "Futures"}">${spot ? "S" : "F"}</span>`;
+    card.innerHTML = `<div class="card-fill"></div><div class="name">${mk}${baseName}${count}</div>`;
     grid.appendChild(card);
     if (tickerCount) card.addEventListener("click", () => showMaps(c, card));
   }
