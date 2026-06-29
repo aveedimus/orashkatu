@@ -85,6 +85,7 @@
   .age-mid   { color: var(--muted); }
   .age-old   { color: #fbbf24; }
   .age-stale { color: #f87171; }
+  .age-purple { color: #c084fc; }
   .age-never { color: #4b515c; }
   .card-fill {
     position: absolute; left: 0; top: 0; bottom: 0; width: 0; z-index: 0;
@@ -292,9 +293,7 @@ function ageText(ts) {
     const m = Math.floor((s % 3600) / 600) * 10;
     return m ? `${h}h ${m}m` : `${h}h`;
   }
-  const d = Math.floor(s / 86400);                      // ≥ 1d: 1-hour steps
-  const h = Math.floor((s % 86400) / 3600);
-  return h ? `${d}d ${h}h` : `${d}d`;
+  return "—";                                           // ≥ 1d: treat as never scanned
 }
 function ageClass(ts) {
   if (!ts) return "age-never";
@@ -302,7 +301,9 @@ function ageClass(ts) {
   if (s < 900) return "age-fresh";     // green  < 15m
   if (s < 1800) return "age-old";      // yellow < 30m
   if (s < 3600) return "age-stale";    // red    < 1h
-  return "age-mid";                    // muted  older
+  if (s < 6000) return "age-purple";   // purple < 100m
+  if (s < 86400) return "age-mid";     // muted  < 1d
+  return "age-never";                  // ≥ 1d → treat as never scanned
 }
 // Update the age labels on existing cards in place (cheap; runs on a 30s interval).
 function refreshAges() {
