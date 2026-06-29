@@ -288,12 +288,12 @@ function ageText(ts) {
   const s = (Date.now() - ts) / 1000;
   if (s < 60) return "now";
   if (s < 3600) return Math.floor(s / 60) + "m";       // < 1h: 1-minute steps
-  if (s < 86400) {                                      // 1h–1d: 10-minute steps
+  if (s < 28800) {                                      // 1h–8h: 10-minute steps
     const h = Math.floor(s / 3600);
     const m = Math.floor((s % 3600) / 600) * 10;
     return m ? `${h}h ${m}m` : `${h}h`;
   }
-  return "—";                                           // ≥ 1d: treat as never scanned
+  return "—";                                           // ≥ 8h: treat as never scanned
 }
 function ageClass(ts) {
   if (!ts) return "age-never";
@@ -302,8 +302,8 @@ function ageClass(ts) {
   if (s < 1800) return "age-old";      // yellow < 30m
   if (s < 3600) return "age-stale";    // red    < 1h
   if (s < 6000) return "age-purple";   // purple < 100m
-  if (s < 86400) return "age-mid";     // muted  < 1d
-  return "age-never";                  // ≥ 1d → treat as never scanned
+  if (s < 28800) return "age-mid";     // muted  < 8h
+  return "age-never";                  // ≥ 8h → treat as never scanned
 }
 // Update the age labels on existing cards in place (cheap; runs on a 30s interval).
 function refreshAges() {
