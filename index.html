@@ -128,6 +128,9 @@
       <div class="field">Max delta $
         <input id="maxDeltaInput" type="number" min="0" step="1000" value="0" title="0 = no cap" style="width:90px" />
       </div>
+      <div class="field">PingPong
+        <input id="ppInput" type="number" min="0" max="1" step="0.05" value="0" title="opposite buy/sell delta similarity; 0 = off" style="width:64px" />
+      </div>
       <div class="field">Binding
         <input id="bindingInput" type="text" placeholder="none" maxlength="3" style="width:54px" />
       </div>
@@ -139,12 +142,12 @@
   <div class="tuning-bar">
     <button id="tuneToggle" class="tune-toggle"><span id="tuneCaret">▸</span> Tuning</button>
     <div class="tune-controls folded" id="tuneControls">
-      <div class="field">Max rows <input id="maxRowsInput" type="number" min="5" max="300" step="1" value="80" title="auto-fit cap" style="width:74px" /></div>
-      <div class="field">Height <input id="hInput" type="number" min="40" max="500" step="2" value="224" style="width:74px" /></div>
-      <div class="field">Width <input id="wInput" type="number" min="40" max="500" step="2" value="224" style="width:74px" /></div>
+      <div class="field">Max rows <input id="maxRowsInput" type="number" min="5" max="300" step="1" value="120" title="auto-fit cap" style="width:74px" /></div>
+      <div class="field">Height <input id="hInput" type="number" min="40" max="800" step="2" value="448" style="width:74px" /></div>
+      <div class="field">Width <input id="wInput" type="number" min="40" max="800" step="2" value="448" style="width:74px" /></div>
       <div class="field">Width-exp <input id="wExpInput" type="number" min="0.1" max="2" step="0.05" value="1" style="width:74px" /></div>
       <div class="field">Bright-exp <input id="bExpInput" type="number" min="0.1" max="3" step="0.05" value="1" style="width:74px" /></div>
-      <div class="field">Floor <input id="floorInput" type="number" min="0" max="0.5" step="0.01" value="0.3" style="width:74px" /></div>
+      <div class="field">Floor <input id="floorInput" type="number" min="0" max="1" step="0.01" value="0.5" style="width:74px" /></div>
       <button id="resetTuneBtn" class="reset-btn">Reset defaults</button>
     </div>
   </div>
@@ -170,11 +173,11 @@ const PAGE = 80;             // thumbnails per "Show more" page
 // Live-tunable render settings (read from the UI; persisted in localStorage).
 const TUNE_KEY = "orashkatu.tune";
 const DEFAULTS = {
-  maxRows: 80,     // rows auto-fit to the data, capped here; beyond this it bins down
-  w: 224, h: 224,  // canvas display size (CSS px); backing store = ×dpr
+  maxRows: 120,    // rows auto-fit to the data, capped here; beyond this it bins down
+  w: 448, h: 448,  // canvas display size (CSS px); backing store = ×dpr
   widthExp: 1,     // bar width curve: w ∝ (delta/maxDelta)^widthExp  (1 = linear)
   brightExp: 1,    // brightness curve: alpha ∝ (delta/maxDelta)^brightExp (1 = linear)
-  floor: 0.3,      // minimum brightness for the faintest shown delta
+  floor: 0.5,      // minimum brightness for the faintest shown delta
 };
 const settings = { ...DEFAULTS };
 
@@ -188,6 +191,7 @@ const tfSelect = document.getElementById("tfSelect");
 const filterInput = document.getElementById("filterInput");
 const minDeltaInput = document.getElementById("minDeltaInput");
 const maxDeltaInput = document.getElementById("maxDeltaInput");
+const ppInput = document.getElementById("ppInput");
 const maxRowsInput = document.getElementById("maxRowsInput");
 const hInput = document.getElementById("hInput");
 const wInput = document.getElementById("wInput");
@@ -209,11 +213,11 @@ function setTuneFolded(folded) {
 function readSettings() {
   const clamp = (v, lo, hi, dflt) => Number.isFinite(v) ? Math.min(hi, Math.max(lo, v)) : dflt;
   settings.maxRows = Math.round(clamp(parseInt(maxRowsInput.value, 10), 5, 300, DEFAULTS.maxRows));
-  settings.h = Math.round(clamp(parseFloat(hInput.value), 40, 500, DEFAULTS.h));
-  settings.w = Math.round(clamp(parseFloat(wInput.value), 40, 500, DEFAULTS.w));
+  settings.h = Math.round(clamp(parseFloat(hInput.value), 40, 800, DEFAULTS.h));
+  settings.w = Math.round(clamp(parseFloat(wInput.value), 40, 800, DEFAULTS.w));
   settings.widthExp = clamp(parseFloat(wExpInput.value), 0.1, 2, DEFAULTS.widthExp);
   settings.brightExp = clamp(parseFloat(bExpInput.value), 0.1, 3, DEFAULTS.brightExp);
-  settings.floor = clamp(parseFloat(floorInput.value), 0, 0.5, DEFAULTS.floor);
+  settings.floor = clamp(parseFloat(floorInput.value), 0, 1, DEFAULTS.floor);
 }
 
 // Put a settings object into the input boxes.
@@ -241,6 +245,7 @@ function savePrefs() {
   try {
     localStorage.setItem(PREF_KEY, JSON.stringify({
       tf: tfSelect.value, minDelta: minDeltaInput.value, maxDelta: maxDeltaInput.value,
+      pp: ppInput.value,
       binding: bindingInput.value, tuneFolded: tuneControls.classList.contains("folded"),
     }));
   } catch (_) {}
@@ -251,6 +256,7 @@ function loadPrefs() {
     if (p.tf) tfSelect.value = p.tf;
     if (p.minDelta != null) minDeltaInput.value = p.minDelta;
     if (p.maxDelta != null) maxDeltaInput.value = p.maxDelta;
+    if (p.pp != null) ppInput.value = p.pp;
     if (p.binding != null) bindingInput.value = p.binding;
     setTuneFolded(p.tuneFolded !== false); // folded by default
   } catch (_) {}
@@ -526,27 +532,32 @@ async function showMaps(conn, card) {
 
   setCardFill(card, 0);
   lastConn = conn;
-  galleryCtx = null;        // drop the previous exchange's data so a mid-scan filter can't revive it
   const label = conn.Name ?? `Connection ${conn.Id}`;
+  // Start an empty gallery and stream thumbnails into it as snapshots arrive.
+  galleryCtx = { label, timeFrame, items: [] };
+  shownCount = PAGE;
+  filterInput.value = "";
   results.innerHTML = "";
+  renderGallery();
   progressText = `Fetching ${tickers.length} cluster snapshot(s) for ${label} (${timeFrame})…`;
   startSpinner();
 
   const t0 = performance.now();
   let done = 0;
-  const raws = await runPool(tickers, async (ticker) => {
-    if (signal.aborted) return null;
+  await runPool(tickers, async (ticker) => {
+    if (signal.aborted) return;
     let raw = null;
     try {
       const snap = await fetchClusterSnapshot(activePort, conn.Id, ticker, timeFrame, signal);
       if (snap) raw = buildRaw(snap);
     } catch (_) {}
     done++;
-    if (myToken === scanToken && (done % 5 === 0 || done === tickers.length)) {
+    if (myToken !== scanToken) return; // superseded — don't touch state
+    if (raw) { galleryCtx.items.push({ ticker, raw }); queueRender(); }
+    if (done % 5 === 0 || done === tickers.length) {
       progressText = `Fetched ${done}/${tickers.length} snapshot(s) for ${label}…`;
       setCardFill(card, (done / tickers.length) * 100); // green fill, left → right
     }
-    return raw ? { ticker, raw } : null;
   }, FETCH_CONCURRENCY);
 
   if (myToken !== scanToken) return; // a newer scan superseded this one — drop our results
@@ -556,18 +567,15 @@ async function showMaps(conn, card) {
   setCardFill(card, 100); // keep the card green until the next scan
   markScanned(conn);      // stamp + refresh the "last scanned" age labels
   const dur = fmtDuration(performance.now() - t0);
-  const items = raws.filter(Boolean);
-  if (!items.length) {
+  const found = galleryCtx.items.length;
+  if (!found) {
+    galleryCtx = null;
     infoBar.innerHTML = `${label}: no cluster data for any ticker (${tickers.length} scanned in <span class="dur">${dur}</span>).`;
     results.innerHTML = `<div class="empty">No delta cluster data.</div>`;
     return;
   }
-
-  galleryCtx = { label, timeFrame, items };
-  shownCount = PAGE;
-  filterInput.value = "";
-  renderGallery();
-  infoBar.innerHTML = `${label}: ${items.length}/${tickers.length} ticker(s) with cluster data · ${timeFrame} · <span class="dur">${dur}</span>.`;
+  renderGallery(); // final flush (in case a throttled render was pending)
+  infoBar.innerHTML = `${label}: ${found}/${tickers.length} ticker(s) with cluster data · ${timeFrame} · <span class="dur">${dur}</span>.`;
 }
 
 function renderGallery() {
@@ -577,10 +585,27 @@ function renderGallery() {
   const q = filterInput.value.trim().toUpperCase();
   const minD = Math.max(0, parseFloat(minDeltaInput.value) || 0);
   const maxD = Math.max(0, parseFloat(maxDeltaInput.value) || 0); // 0 = no cap
-  const filtered = items.filter(it =>
-    (!q || it.ticker.toUpperCase().includes(q)) &&
-    it.raw.rawMaxDelta >= minD &&
-    (maxD <= 0 || it.raw.rawMaxDelta <= maxD));
+  const pp = Math.max(0, Math.min(1, parseFloat(ppInput.value) || 0)); // 0 = off
+  const filtered = items.filter(it => {
+    const r = it.raw;
+    if (q && !it.ticker.toUpperCase().includes(q)) return false;
+    if (r.rawMaxDelta < minD) return false;
+    if (maxD > 0 && r.rawMaxDelta > maxD) return false;
+    if (pp > 0) {
+      // Opposite big deltas of nearly the same size (smart-money ping-pong): biggest buy
+      // bar vs biggest sell bar, from the SAME binned model that's drawn (matches the view).
+      const m = buildModel(r, effectiveRows(r));
+      let buy = 0, sell = 0;
+      for (let i = 0; i < m.bid.length; i++) {
+        const d = m.bid[i] - m.ask[i];
+        if (d > buy) buy = d; else if (-d > sell) sell = -d;
+      }
+      if (buy <= 0 || sell <= 0) return false;
+      if (Math.min(buy, sell) < minD) return false;            // both sides must be "big"
+      if (Math.min(buy, sell) / Math.max(buy, sell) < pp) return false; // similarity
+    }
+    return true;
+  });
   const shown = filtered.slice(0, shownCount);
 
   results.innerHTML = "";
@@ -640,6 +665,14 @@ function renderGallery() {
   }
 }
 
+// Throttle re-renders while results stream in (avoids rebuilding the grid per arrival).
+let renderQueued = false;
+function queueRender() {
+  if (renderQueued) return;
+  renderQueued = true;
+  setTimeout(() => { renderQueued = false; if (galleryCtx) renderGallery(); }, 300);
+}
+
 // Live filtering as you type (reset paging).
 function onFilterChange() {
   if (!galleryCtx) return;
@@ -649,11 +682,13 @@ function onFilterChange() {
 filterInput.addEventListener("input", onFilterChange);
 minDeltaInput.addEventListener("input", onFilterChange);
 maxDeltaInput.addEventListener("input", onFilterChange);
+ppInput.addEventListener("input", onFilterChange);
 
 // Persist everyday prefs on change (timeframe applies on the next scan).
 tfSelect.addEventListener("change", savePrefs);
 minDeltaInput.addEventListener("input", savePrefs);
 maxDeltaInput.addEventListener("input", savePrefs);
+ppInput.addEventListener("input", savePrefs);
 bindingInput.addEventListener("input", savePrefs);
 
 // Tuning controls — re-render with new settings (no refetch), then persist.
@@ -669,7 +704,9 @@ tuneToggle.addEventListener("click", () => {
 });
 
 // Click a thumbnail → set that ticker in MetaScalp on the maps' connection.
-results.addEventListener("click", (e) => {
+// Use pointerdown (not click): it fires on the first press, so a streaming re-render that
+// recreates the thumbnail between mouse-down and up can't swallow the gesture.
+results.addEventListener("pointerdown", (e) => {
   const card = e.target.closest(".thumb");
   if (card) changeTicker(card.dataset.ticker);
 });
