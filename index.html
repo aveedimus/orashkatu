@@ -648,8 +648,8 @@ function renderGallery() {
     const more = document.createElement("button");
     const remaining = filtered.length - shown.length;
     if (remaining > 0) {
+      more.className = "more-btn";
       more.textContent = `Show more (${remaining})`;
-      more.addEventListener("click", () => { shownCount += PAGE; renderGallery(); });
     } else {
       more.textContent = "the end";
       more.disabled = true;
@@ -658,7 +658,8 @@ function renderGallery() {
     up.className = "scroll-up";
     up.textContent = "↑";
     up.title = "Scroll to top";
-    up.addEventListener("click", () => window.scrollTo({ top: 0, behavior: "smooth" }));
+    // No per-button listeners — handled by the delegated pointerdown on `results` below,
+    // so a streaming re-render can't swallow the gesture (single press works).
     wrap.appendChild(more);
     wrap.appendChild(up);
     results.appendChild(wrap);
@@ -703,10 +704,12 @@ tuneToggle.addEventListener("click", () => {
   savePrefs();
 });
 
-// Click a thumbnail → set that ticker in MetaScalp on the maps' connection.
-// Use pointerdown (not click): it fires on the first press, so a streaming re-render that
-// recreates the thumbnail between mouse-down and up can't swallow the gesture.
+// All results-area buttons/thumbnails via one delegated pointerdown on the persistent
+// `results` container. pointerdown fires on first press, so a streaming re-render that
+// recreates these elements between mouse-down and up can't swallow the gesture.
 results.addEventListener("pointerdown", (e) => {
+  if (e.target.closest(".scroll-up")) { window.scrollTo({ top: 0, behavior: "smooth" }); return; }
+  if (e.target.closest(".more-btn")) { shownCount += PAGE; renderGallery(); return; }
   const card = e.target.closest(".thumb");
   if (card) changeTicker(card.dataset.ticker);
 });
@@ -721,10 +724,11 @@ async function changeTicker(ticker) {
     const res = await fetch(`http://${HOST}:${activePort}/api/change-ticker`, {
       method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
     });
-    const data = await res.json().catch(() => ({}));
-    infoBar.textContent = res.ok
-      ? `Set ticker → ${ticker}${binding ? ` (binding ${binding})` : ""} on ${lastConn.Name ?? lastConn.Id}.`
-      : `Change ticker failed: ${pick(data, "Error") || res.status}`;
+    // On success leave the status line as-is (the scan summary); only surface failures.
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      infoBar.textContent = `Change ticker failed: ${pick(data, "Error") || res.status}`;
+    }
   } catch (err) {
     infoBar.textContent = `Change ticker failed: ${err.message}`;
   }
