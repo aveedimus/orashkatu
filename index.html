@@ -104,6 +104,21 @@
   .thumb canvas { display: block; border-radius: 3px; } /* size set in JS */
   .thumb .tlabel { font-size: 11px; color: var(--text); text-align: center; white-space: nowrap;
     overflow: hidden; text-overflow: ellipsis; }
+  .thumb .saves { display: flex; gap: 6px; justify-content: center; }
+  .thumb .save-btn { background: transparent; border: 1px solid var(--border); border-radius: 4px;
+    padding: 1px 8px; font-size: 12px; line-height: 18px; cursor: pointer; color: var(--muted); }
+  .thumb .save-btn.good:hover { opacity: 1; border-color: #3fb96b; color: #4ade80; }
+  .thumb .save-btn.bad:hover  { opacity: 1; border-color: #e0564a; color: #f87171; }
+  .thumb .save-btn.saved-good { border-color: #3fb96b; color: #4ade80; }
+  .thumb .save-btn.saved-bad  { border-color: #e0564a; color: #f87171; }
+  .linkish { background: transparent; border: none; color: var(--muted); font-size: 12px; padding: 4px 6px; }
+  .linkish:hover { color: var(--text); border: none; }
+  #saveToast { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%);
+    background: #12351f; color: #b8f5cf; border: 1px solid #2f6b45; border-radius: 8px;
+    padding: 10px 16px; font-size: 13px; box-shadow: 0 8px 30px rgba(0,0,0,.5);
+    z-index: 80; opacity: 0; pointer-events: none; transition: opacity .2s; max-width: 84vw; text-align: center; }
+  #saveToast.show { opacity: 1; }
+  #saveToast.err { background: #3a1a1a; color: #f5b8b8; border-color: #6b2f2f; }
   .more-wrap { display: flex; justify-content: center; align-items: center; gap: 8px; margin-top: 16px; }
   .scroll-up { width: 34px; padding: 7px 0; text-align: center; color: var(--muted); }
   .scroll-up:hover { color: var(--text); }
@@ -113,6 +128,12 @@
   <header>
     <h1>/orashkatu</h1>
     <div class="controls">
+      <div class="field">Preset
+        <select id="presetSelect">
+          <option value="">— none —</option>
+          <option value="balpp">Balanced ping-pong</option>
+        </select>
+      </div>
       <div class="field">Timeframe
         <select id="tfSelect">
           <option>M1</option><option selected>M5</option><option>M10</option><option>M15</option>
@@ -130,6 +151,24 @@
       </div>
       <div class="field">PingPong
         <input id="ppInput" type="number" min="0" max="1" step="0.05" value="0" title="opposite buy/sell delta similarity; 0 = off" style="width:64px" />
+      </div>
+      <div class="field">Separation
+        <input id="sepInput" type="number" min="0" max="1" step="0.05" value="0" title="green/red price-band separation; 0 = off" style="width:64px" />
+      </div>
+      <div class="field">Balance
+        <input id="balInput" type="number" min="0" max="1" step="0.05" value="0" title="buy/sell volume balance; 0 = off" style="width:64px" />
+      </div>
+      <div class="field">Min act $
+        <input id="minActInput" type="number" min="0" step="1000" value="0" title="min total significant delta USD; 0 = off" style="width:80px" />
+      </div>
+      <div class="field">Min side
+        <input id="minSideInput" type="number" min="0" step="1" value="0" title="min significant cells on each side; 0 = off" style="width:56px" />
+      </div>
+      <div class="field">Min fat
+        <input id="minFatInput" type="number" min="0" step="0.5" value="0" title="fattest bar ÷ average bar (volume); only maps with a standout fat bar. Try 4. 0 = off" style="width:56px" />
+      </div>
+      <div class="field">Min Δshare
+        <input id="minFatDeltaInput" type="number" min="0" max="1" step="0.05" value="0" title="fat bar's share of the map's total delta (2nd check); good ≈ 0.7, GIGGLE 0.31. Try 0.5. 0 = off" style="width:56px" />
       </div>
       <div class="field">Binding
         <input id="bindingInput" type="text" placeholder="none" maxlength="3" style="width:54px" />
@@ -155,6 +194,7 @@
   <div class="info-bar" id="infoBar">Scanning for a running MetaScalp instance&hellip;</div>
   <div class="grid" id="grid"></div>
   <div id="results"></div>
+  <div id="saveToast"></div>
 
 <script>
 // MetaScalp delta cluster maps — see MetaScalp-Api.md
@@ -188,10 +228,24 @@ const grid = document.getElementById("grid");
 const results = document.getElementById("results");
 const refreshBtn = document.getElementById("refreshBtn");
 const tfSelect = document.getElementById("tfSelect");
+const presetSelect = document.getElementById("presetSelect");
 const filterInput = document.getElementById("filterInput");
+
+// Named filter presets (threshold bundles). "" = clear all filters to off.
+const PRESETS = {
+  "":      { minDelta: 0, maxDelta: 0, pp: 0, sep: 0,   bal: 0,    minAct: 0,     minSide: 0 },
+  // balanced + separated bands + enough real two-sided activity (kills dust / one-sided-count)
+  "balpp": { minDelta: 0, maxDelta: 0, pp: 0, sep: 0.9, bal: 0.8, minAct: 10000, minSide: 3 },
+};
 const minDeltaInput = document.getElementById("minDeltaInput");
 const maxDeltaInput = document.getElementById("maxDeltaInput");
 const ppInput = document.getElementById("ppInput");
+const sepInput = document.getElementById("sepInput");
+const balInput = document.getElementById("balInput");
+const minActInput = document.getElementById("minActInput");
+const minSideInput = document.getElementById("minSideInput");
+const minFatInput = document.getElementById("minFatInput");
+const minFatDeltaInput = document.getElementById("minFatDeltaInput");
 const maxRowsInput = document.getElementById("maxRowsInput");
 const hInput = document.getElementById("hInput");
 const wInput = document.getElementById("wInput");
@@ -245,7 +299,8 @@ function savePrefs() {
   try {
     localStorage.setItem(PREF_KEY, JSON.stringify({
       tf: tfSelect.value, minDelta: minDeltaInput.value, maxDelta: maxDeltaInput.value,
-      pp: ppInput.value,
+      pp: ppInput.value, sep: sepInput.value, bal: balInput.value,
+      minAct: minActInput.value, minSide: minSideInput.value, minFat: minFatInput.value, minFatDelta: minFatDeltaInput.value,
       binding: bindingInput.value, tuneFolded: tuneControls.classList.contains("folded"),
     }));
   } catch (_) {}
@@ -257,6 +312,12 @@ function loadPrefs() {
     if (p.minDelta != null) minDeltaInput.value = p.minDelta;
     if (p.maxDelta != null) maxDeltaInput.value = p.maxDelta;
     if (p.pp != null) ppInput.value = p.pp;
+    if (p.sep != null) sepInput.value = p.sep;
+    if (p.bal != null) balInput.value = p.bal;
+    if (p.minAct != null) minActInput.value = p.minAct;
+    if (p.minSide != null) minSideInput.value = p.minSide;
+    if (p.minFat != null) minFatInput.value = p.minFat;
+    if (p.minFatDelta != null) minFatDeltaInput.value = p.minFatDelta;
     if (p.binding != null) bindingInput.value = p.binding;
     setTuneFolded(p.tuneFolded !== false); // folded by default
   } catch (_) {}
@@ -483,6 +544,89 @@ function buildModel(raw, rows) {
   return { C, R, bid, ask, maxDelta: maxDelta || 1 };
 }
 
+// Per-chart metrics over the SIGNIFICANT deltas (≥ SEP_MIN_FRAC of the chart's max):
+//   sep  = price-band separation, measured ON THE FAT BARS ONLY (≥50% of max vol), volume-weighted.
+//          Per fat bar: best single price line splitting its buys vs sells. 0.5 = overlapping, →1 = clean.
+//   bal  = buy/sell balance, measured ON THE FAT BARS ONLY, volume-weighted. Per fat bar:
+//          min(buy,sell)/max(buy,sell). 0 = one-sided, 1 = balanced.
+//   sigUsd  = total significant delta USD, WHOLE MAP (filters out dust-only / near-empty maps).
+//   sideMin = significant cells on the smaller side, WHOLE MAP (one-sided-count filter).
+//   fat      = fattest bar ÷ the MEDIAN (typical) bar. Median resists both a lone tiny bar and a 2nd
+//              spike, so a real standout reads dominant (BCH ~69×) while a uniform all-fat map reads
+//              flat (GRAM ~1.5×). This is the "has a standout fat bar" gate.
+//   fatDelta = the fat bars' combined share of the map's total |delta| (2nd-stage check: is the fat
+//              bars' delta actually dominant, or are the other bars nearly as big?). GIGGLE 0.31, good ~0.70.
+const SEP_MIN_FRAC = 0.1;   // ignore dust: only cells ≥ this fraction of the chart's max delta
+function chartMetrics(m) {
+  const R = m.R;
+  const colVol = new Float64Array(m.C);            // total volume (bid+ask) per time bar
+  const colDelta = new Float64Array(m.C);          // total |delta| per time bar
+  const minAbs = SEP_MIN_FRAC * (m.maxDelta || 1);
+  let totBuy = 0, totSell = 0, buyCells = 0, sellCells = 0;   // WHOLE-MAP (for sigUsd + sideMin)
+  for (let c = 0; c < m.C; c++) {
+    for (let r = 0; r < R; r++) {
+      const bd = m.bid[c * R + r], ak = m.ask[c * R + r];
+      colVol[c] += bd + ak;
+      const d = bd - ak, w = Math.abs(d);
+      colDelta[c] += w;
+      if (w < minAbs) continue;                    // skip dust
+      if (d > 0) { totBuy += w; buyCells++; }
+      else { totSell += w; sellCells++; }
+    }
+  }
+  const tot = totBuy + totSell;                    // total significant delta USD (filters use this)
+  const sideMin = Math.min(buyCells, sellCells);
+  let maxV = 0;                                      // fattest-VOLUME bar
+  for (let c = 0; c < m.C; c++) if (colVol[c] > maxV) maxV = colVol[c];
+  // fat = fattest ÷ the MEDIAN (typical) bar. Median is immune to both a lone tiny bar AND a 2nd spike,
+  // so it reads a real standout as dominant (BCH 69×) and a uniform all-fat map as flat (GRAM 1.5×).
+  const sorted = Array.from(colVol).sort((a, b) => a - b);
+  const n = sorted.length;
+  const median = n ? (n % 2 ? sorted[(n - 1) / 2] : (sorted[n / 2 - 1] + sorted[n / 2]) / 2) : 0;
+  const fat = median > 0 ? maxV / median : 0;
+  // the FAT bars' (every bar ≥50% of max) combined share of the map's total |delta|.
+  let sumD = 0, fatD = 0;
+  for (let c = 0; c < m.C; c++) { sumD += colDelta[c]; if (colVol[c] >= 0.5 * maxV) fatD += colDelta[c]; }
+  const fatDelta = sumD > 0 ? fatD / sumD : 0;
+  // ---- Balance & Separation on the FAT BARS ONLY, volume-weighted across them ----
+  const fatThr = 0.5 * maxV;
+  const rb = new Float64Array(R), rs = new Float64Array(R);   // reused per fat bar
+  let wSum = 0, balW = 0, sepW = 0;
+  for (let c = 0; c < m.C; c++) {
+    if (colVol[c] < fatThr || colVol[c] <= 0) continue;
+    rb.fill(0); rs.fill(0);
+    let tB = 0, tS = 0;
+    for (let r = 0; r < R; r++) {
+      const d = m.bid[c * R + r] - m.ask[c * R + r], w = Math.abs(d);
+      if (w < minAbs) continue;
+      if (d > 0) { rb[r] = w; tB += w; } else { rs[r] = w; tS += w; }
+    }
+    const t = tB + tS;
+    if (t <= 0) continue;
+    const balC = (tB > 0 && tS > 0) ? Math.min(tB, tS) / Math.max(tB, tS) : 0;
+    let sepC = 1;
+    if (tB > 0 && tS > 0) {
+      let cb = 0, cs = 0, best = Math.max(tB, tS);
+      for (let r = 0; r < R; r++) { cb += rb[r]; cs += rs[r]; best = Math.max(best, cb + (tS - cs), cs + (tB - cb)); }
+      sepC = best / t;
+    }
+    balW += balC * colVol[c]; sepW += sepC * colVol[c]; wSum += colVol[c];
+  }
+  const bal = wSum > 0 ? balW / wSum : 0;
+  const sep = wSum > 0 ? sepW / wSum : 1;
+  return { sep, bal, sigUsd: tot, sideMin, fat, fatDelta };
+}
+
+// Cached per chart, keyed by Max rows (binning changes the model). Recompute if it changed.
+function getMetrics(it) {
+  if (it._mRows !== settings.maxRows) {
+    it._m = chartMetrics(buildModel(it.raw, effectiveRows(it.raw)));
+    it._mRows = settings.maxRows;
+  }
+  return it._m;
+}
+
+
 // Draw the delta footprint: time bars (columns) x price levels (high at top). Each level is
 // a horizontal bar in its column slot; balanced levels drop out (only net delta shows).
 //   COLOR      = side: green = buy (bid-heavy), red = sell (ask-heavy).
@@ -498,6 +642,17 @@ function drawThumb(cv, m) {
   const barH = cv.height / settings.maxRows;
   const yOff = (cv.height - m.R * barH) / 2;
   const maxDelta = m.maxDelta || 1;
+  // Fat-bar highlight: a time column is "fat" if its total volume ≥ 50% of the fattest column.
+  const colVol = new Array(m.C).fill(0);
+  let maxV = 0;
+  for (let c = 0; c < m.C; c++) {
+    let s = 0; for (let r = 0; r < m.R; r++) { const i = c * m.R + r; s += m.bid[i] + m.ask[i]; }
+    colVol[c] = s; if (s > maxV) maxV = s;
+  }
+  const fatThr = 0.5 * (maxV || 1);
+  for (let c = 0; c < m.C; c++) if (colVol[c] >= fatThr) {          // faint amber wash behind fat columns
+    ctx.fillStyle = "rgba(250,204,21,0.09)"; ctx.fillRect(c * cw, 0, cw, cv.height);
+  }
   for (let c = 0; c < m.C; c++) {
     for (let r = 0; r < m.R; r++) {
       const i = c * m.R + r;
@@ -511,6 +666,9 @@ function drawThumb(cv, m) {
       ctx.fillStyle = `rgba(${col},${alpha.toFixed(3)})`;
       ctx.fillRect(c * cw, yOff + r * barH, w, barH + 0.6);
     }
+  }
+  for (let c = 0; c < m.C; c++) if (colVol[c] >= fatThr) {          // solid amber tab at the bottom = "fat bar"
+    ctx.fillStyle = "rgba(250,204,21,0.85)"; ctx.fillRect(c * cw, cv.height - 3, cw - 1, 3);
   }
 }
 
@@ -532,6 +690,7 @@ async function showMaps(conn, card) {
 
   setCardFill(card, 0);
   lastConn = conn;
+  savedSamples.clear();   // saved-badges are per-scan: start un-lit so a ticker can be re-saved fresh each scan
   const label = conn.Name ?? `Connection ${conn.Id}`;
   // Start an empty gallery and stream thumbnails into it as snapshots arrive.
   galleryCtx = { label, timeFrame, items: [] };
@@ -546,14 +705,14 @@ async function showMaps(conn, card) {
   let done = 0;
   await runPool(tickers, async (ticker) => {
     if (signal.aborted) return;
-    let raw = null;
+    let raw = null, snap = null;
     try {
-      const snap = await fetchClusterSnapshot(activePort, conn.Id, ticker, timeFrame, signal);
+      snap = await fetchClusterSnapshot(activePort, conn.Id, ticker, timeFrame, signal);
       if (snap) raw = buildRaw(snap);
     } catch (_) {}
     done++;
     if (myToken !== scanToken) return; // superseded — don't touch state
-    if (raw) { galleryCtx.items.push({ ticker, raw }); queueRender(); }
+    if (raw) { galleryCtx.items.push({ ticker, raw, snap }); queueRender(); }   // keep raw snapshot for sample-saving
     if (done % 5 === 0 || done === tickers.length) {
       progressText = `Fetched ${done}/${tickers.length} snapshot(s) for ${label}…`;
       setCardFill(card, (done / tickers.length) * 100); // green fill, left → right
@@ -583,29 +742,7 @@ function renderGallery() {
   readSettings();
   const { label, timeFrame, items } = galleryCtx;
   const q = filterInput.value.trim().toUpperCase();
-  const minD = Math.max(0, parseFloat(minDeltaInput.value) || 0);
-  const maxD = Math.max(0, parseFloat(maxDeltaInput.value) || 0); // 0 = no cap
-  const pp = Math.max(0, Math.min(1, parseFloat(ppInput.value) || 0)); // 0 = off
-  const filtered = items.filter(it => {
-    const r = it.raw;
-    if (q && !it.ticker.toUpperCase().includes(q)) return false;
-    if (r.rawMaxDelta < minD) return false;
-    if (maxD > 0 && r.rawMaxDelta > maxD) return false;
-    if (pp > 0) {
-      // Opposite big deltas of nearly the same size (smart-money ping-pong): biggest buy
-      // bar vs biggest sell bar, from the SAME binned model that's drawn (matches the view).
-      const m = buildModel(r, effectiveRows(r));
-      let buy = 0, sell = 0;
-      for (let i = 0; i < m.bid.length; i++) {
-        const d = m.bid[i] - m.ask[i];
-        if (d > buy) buy = d; else if (-d > sell) sell = -d;
-      }
-      if (buy <= 0 || sell <= 0) return false;
-      if (Math.min(buy, sell) < minD) return false;            // both sides must be "big"
-      if (Math.min(buy, sell) / Math.max(buy, sell) < pp) return false; // similarity
-    }
-    return true;
-  });
+  const filtered = items.filter(passesFilters);
   const shown = filtered.slice(0, shownCount);
 
   results.innerHTML = "";
@@ -615,32 +752,13 @@ function renderGallery() {
     + (filtered.length > shown.length ? ` (showing ${shown.length})` : "");
   results.appendChild(h2);
 
-  const dpr = Math.min(2, window.devicePixelRatio || 1);
   const gridEl = document.createElement("div");
   gridEl.className = "thumb-grid";
   gridEl.style.gridTemplateColumns = `repeat(auto-fill, ${settings.w + 14}px)`;
-  for (const it of shown) {
-    const card = document.createElement("div");
-    card.className = "thumb";
-    card.style.width = (settings.w + 14) + "px";
-    card.dataset.ticker = it.ticker;
-
-    const cv = document.createElement("canvas");
-    cv.width = Math.round(settings.w * dpr);   // backing store at device resolution → crisp
-    cv.height = Math.round(settings.h * dpr);
-    cv.style.width = settings.w + "px";         // displayed 1:1, no CSS scaling/blur
-    cv.style.height = settings.h + "px";
-    drawThumb(cv, buildModel(it.raw, effectiveRows(it.raw)));
-    card.appendChild(cv);
-
-    const lab = document.createElement("div");
-    lab.className = "tlabel";
-    lab.textContent = it.ticker;
-    card.appendChild(lab);
-
-    gridEl.appendChild(card);
-  }
+  for (const it of shown) gridEl.appendChild(makeCard(it));
   results.appendChild(gridEl);
+  galleryCtx.gridEl = gridEl;                        // remembered so streaming can append into it
+  galleryCtx.shownSet = new Set(shown.map(it => it.ticker));
 
   if (shown.length) {
     const wrap = document.createElement("div");
@@ -666,12 +784,92 @@ function renderGallery() {
   }
 }
 
+// Build one thumbnail card (canvas + label + save buttons).
+function makeCard(it) {
+  const dpr = Math.min(2, window.devicePixelRatio || 1);
+  const card = document.createElement("div");
+  card.className = "thumb";
+  card.style.width = (settings.w + 14) + "px";
+  card.dataset.ticker = it.ticker;
+  const cv = document.createElement("canvas");
+  cv.width = Math.round(settings.w * dpr); cv.height = Math.round(settings.h * dpr);
+  cv.style.width = settings.w + "px"; cv.style.height = settings.h + "px";
+  drawThumb(cv, buildModel(it.raw, effectiveRows(it.raw)));
+  card.appendChild(cv);
+  const lab = document.createElement("div");
+  lab.className = "tlabel";
+  const gm = getMetrics(it);
+  lab.innerHTML = `${it.ticker} <span style="color:var(--muted);font-weight:400">${gm.fat.toFixed(1)}× Δ${gm.fatDelta.toFixed(2)}</span>`;
+  card.appendChild(lab);
+  const saves = document.createElement("div");
+  saves.className = "saves";
+  const saved = savedSamples.get(it.ticker);
+  saves.innerHTML = `<button class="save-btn good${saved === "good" ? " saved-good" : ""}" data-save="good" title="Save this snapshot to samples/good">💾 good</button>`
+    + `<button class="save-btn bad${saved === "bad" ? " saved-bad" : ""}" data-save="bad" title="Save this snapshot to samples/bad">💾 bad</button>`;
+  card.appendChild(saves);
+  return card;
+}
+
+// Does an item pass the current filters? (shared by full render + streaming append)
+function passesFilters(it) {
+  const q = filterInput.value.trim().toUpperCase();
+  if (q && !it.ticker.toUpperCase().includes(q)) return false;
+  const r = it.raw;
+  const minD = Math.max(0, parseFloat(minDeltaInput.value) || 0);
+  const maxD = Math.max(0, parseFloat(maxDeltaInput.value) || 0);
+  const pp = Math.max(0, Math.min(1, parseFloat(ppInput.value) || 0));
+  const sepMin = Math.max(0, Math.min(1, parseFloat(sepInput.value) || 0));
+  const balMin = Math.max(0, Math.min(1, parseFloat(balInput.value) || 0));
+  const minAct = Math.max(0, parseFloat(minActInput.value) || 0);
+  const minSide = Math.max(0, parseInt(minSideInput.value, 10) || 0);
+  const minFat = Math.max(0, parseFloat(minFatInput.value) || 0);
+  const minFatDelta = Math.max(0, Math.min(1, parseFloat(minFatDeltaInput.value) || 0));
+  if (r.rawMaxDelta < minD) return false;
+  if (maxD > 0 && r.rawMaxDelta > maxD) return false;
+  if (sepMin > 0 && getMetrics(it).sep < sepMin) return false;
+  if (balMin > 0 && getMetrics(it).bal < balMin) return false;
+  if (minAct > 0 && getMetrics(it).sigUsd < minAct) return false;
+  if (minSide > 0 && getMetrics(it).sideMin < minSide) return false;
+  if (minFat > 0 && getMetrics(it).fat < minFat) return false;
+  if (minFatDelta > 0 && getMetrics(it).fatDelta < minFatDelta) return false;
+  if (pp > 0) {
+    const m = buildModel(r, effectiveRows(r));
+    let buy = 0, sell = 0;
+    for (let i = 0; i < m.bid.length; i++) { const d = m.bid[i] - m.ask[i]; if (d > buy) buy = d; else if (-d > sell) sell = -d; }
+    if (buy <= 0 || sell <= 0) return false;
+    if (Math.min(buy, sell) < minD) return false;
+    if (Math.min(buy, sell) / Math.max(buy, sell) < pp) return false;
+  }
+  return true;
+}
+
+// Streaming APPEND: add cards only for newly-arrived items that pass, WITHOUT touching existing cards.
+// This is what keeps clicks working mid-scan — the DOM under the cursor is never destroyed & rebuilt.
+function appendNewCards() {
+  if (!galleryCtx || !galleryCtx.gridEl || !galleryCtx.shownSet) { renderGallery(); return; }
+  const seen = galleryCtx.shownSet;
+  let added = 0, total = 0;
+  for (const it of galleryCtx.items) {
+    if (!passesFilters(it)) continue;
+    total++;
+    if (seen.has(it.ticker) || total > shownCount) continue;
+    seen.add(it.ticker);
+    galleryCtx.gridEl.appendChild(makeCard(it));
+    added++;
+  }
+  if (added) {                                       // refresh only the count in the header (cheap, text-only)
+    const h2 = results.querySelector("h2");
+    if (h2) h2.textContent = `${galleryCtx.label} — ${total} map(s) · ${galleryCtx.timeFrame}`
+      + (total > seen.size ? ` (showing ${seen.size})` : "");
+  }
+}
+
 // Throttle re-renders while results stream in (avoids rebuilding the grid per arrival).
 let renderQueued = false;
 function queueRender() {
   if (renderQueued) return;
   renderQueued = true;
-  setTimeout(() => { renderQueued = false; if (galleryCtx) renderGallery(); }, 300);
+  setTimeout(() => { renderQueued = false; if (galleryCtx) appendNewCards(); }, 300);
 }
 
 // Live filtering as you type (reset paging).
@@ -684,12 +882,31 @@ filterInput.addEventListener("input", onFilterChange);
 minDeltaInput.addEventListener("input", onFilterChange);
 maxDeltaInput.addEventListener("input", onFilterChange);
 ppInput.addEventListener("input", onFilterChange);
+sepInput.addEventListener("input", onFilterChange);
+balInput.addEventListener("input", onFilterChange);
+minActInput.addEventListener("input", onFilterChange);
+minSideInput.addEventListener("input", onFilterChange);
+minFatInput.addEventListener("input", onFilterChange);
+minFatDeltaInput.addEventListener("input", onFilterChange);
+
+const FILTER_INPUTS = [minDeltaInput, maxDeltaInput, ppInput, sepInput, balInput, minActInput, minSideInput, minFatInput, minFatDeltaInput];
+
+// Preset dropdown — apply a threshold bundle to the filter inputs, then filter + persist.
+presetSelect.addEventListener("change", () => {
+  const p = PRESETS[presetSelect.value] || PRESETS[""];
+  minDeltaInput.value = p.minDelta; maxDeltaInput.value = p.maxDelta;
+  ppInput.value = p.pp; sepInput.value = p.sep; balInput.value = p.bal;
+  minActInput.value = p.minAct; minSideInput.value = p.minSide;
+  savePrefs(); onFilterChange();
+});
+// Any manual filter tweak means it's no longer a named preset.
+for (const el of FILTER_INPUTS) {
+  el.addEventListener("input", () => { presetSelect.value = ""; });
+}
 
 // Persist everyday prefs on change (timeframe applies on the next scan).
 tfSelect.addEventListener("change", savePrefs);
-minDeltaInput.addEventListener("input", savePrefs);
-maxDeltaInput.addEventListener("input", savePrefs);
-ppInput.addEventListener("input", savePrefs);
+for (const el of FILTER_INPUTS) el.addEventListener("input", savePrefs);
 bindingInput.addEventListener("input", savePrefs);
 
 // Tuning controls — re-render with new settings (no refetch), then persist.
@@ -703,16 +920,81 @@ tuneToggle.addEventListener("click", () => {
   setTuneFolded(!tuneControls.classList.contains("folded"));
   savePrefs();
 });
-
 // All results-area buttons/thumbnails via one delegated pointerdown on the persistent
 // `results` container. pointerdown fires on first press, so a streaming re-render that
 // recreates these elements between mouse-down and up can't swallow the gesture.
 results.addEventListener("pointerdown", (e) => {
+  const saveBtn = e.target.closest(".save-btn");
+  if (saveBtn) {
+    const tk = saveBtn.closest(".thumb")?.dataset.ticker;
+    const it = tk && galleryCtx && galleryCtx.items.find(x => x.ticker === tk);
+    if (it) saveSample(it, saveBtn.dataset.save);
+    return;                                   // don't fall through to change-ticker
+  }
   if (e.target.closest(".scroll-up")) { window.scrollTo({ top: 0, behavior: "smooth" }); return; }
   if (e.target.closest(".more-btn")) { shownCount += PAGE; renderGallery(); return; }
   const card = e.target.closest(".thumb");
   if (card) changeTicker(card.dataset.ticker);
 });
+
+// ---- Save a snapshot (raw JSON + PNG image) to samples/good | samples/bad ----
+// Uses the File System Access API: first save prompts for the `samples` folder; then it
+// creates/opens good/ and bad/ under it and writes both files. savedSamples marks the card.
+const savedSamples = new Map();   // ticker -> "good"|"bad" (last save; survives re-render)
+let sampleDir = null;             // the picked `samples` directory handle (this session)
+// Save feedback goes to its OWN toast (not infoBar), because the scan spinner rewrites infoBar
+// every 120ms and would wipe the message instantly while scanning.
+const saveToast = document.getElementById("saveToast");
+let toastTimer = null;
+function showToast(msg, isErr) {
+  saveToast.textContent = msg;
+  saveToast.className = "show" + (isErr ? " err" : "");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { saveToast.className = ""; }, 4000);
+}
+function stampNow() {
+  const d = new Date(), p = n => String(n).padStart(2, "0");
+  return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
+}
+async function ensureSampleDir() {
+  if (sampleDir) return sampleDir;
+  if (!window.showDirectoryPicker) { alert("This browser has no File System Access API. Use Chrome/Edge over localhost."); return null; }
+  try { sampleDir = await window.showDirectoryPicker({ id: "orashkatu-samples", mode: "readwrite" }); }
+  catch (_) { return null; }        // user cancelled the picker
+  showToast("Samples folder linked — saving here for the rest of this session.");
+  return sampleDir;
+}
+async function writeFile(dir, name, blob) {
+  const fh = await dir.getFileHandle(name, { create: true });
+  const w = await fh.createWritable();
+  await w.write(blob); await w.close();
+}
+function thumbBlob(it) {   // render the thumbnail to a PNG blob (independent of the DOM canvas)
+  const cv = document.createElement("canvas");
+  const dpr = Math.min(2, window.devicePixelRatio || 1);
+  cv.width = Math.round(settings.w * dpr); cv.height = Math.round(settings.h * dpr);
+  drawThumb(cv, buildModel(it.raw, effectiveRows(it.raw)));
+  return new Promise(res => cv.toBlob(res, "image/png"));
+}
+async function saveSample(it, kind) {
+  const dir = await ensureSampleDir();
+  if (!dir) return;
+  try {
+    const sub = await dir.getDirectoryHandle(kind, { create: true });
+    const conn = lastConn || {};
+    const ex = String(pick(conn, "Exchange") || "EX").replace(/[^\w.-]/g, "");
+    const market = isSpot(conn) ? "spot" : "futures";
+    const tf = galleryCtx ? galleryCtx.timeFrame : "";
+    const base = `${ex}_${it.ticker.replace(/[^\w.-]/g, "")}_${market}_${tf}_${stampNow()}`;
+    const payload = { ...it.snap, _meta: { exchange: ex, ticker: it.ticker, marketType: market, timeFrame: tf, savedAt: stampNow(), label: kind } };
+    await writeFile(sub, base + ".json", new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" }));
+    const png = await thumbBlob(it);
+    if (png) await writeFile(sub, base + ".png", png);
+    savedSamples.set(it.ticker, kind);
+    for (const b of results.querySelectorAll(`.thumb[data-ticker="${CSS.escape(it.ticker)}"] .save-btn.${kind}`)) b.classList.add("saved-" + kind);
+    showToast(`💾 Saved ${kind.toUpperCase()}: ${it.ticker} (${tf}) → samples/${kind}/`);
+  } catch (e) { showToast("Save failed: " + e.message, true); }
+}
 
 // POST /api/change-ticker — switch MetaScalp's active ticker (+ optional binding).
 async function changeTicker(ticker) {
